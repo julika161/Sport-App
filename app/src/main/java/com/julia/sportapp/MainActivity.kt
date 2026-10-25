@@ -74,6 +74,7 @@ fun SportAppScreen() {
             Screen.Start -> StartContent(db, Modifier.padding(innerPadding))
             Screen.Kalender -> CalendarContent(db, Modifier.padding(innerPadding))
             Screen.Auswertung -> StatsContent(db, Modifier.padding(innerPadding))
+            Screen.Abzeichen -> BadgesContent(db, Modifier.padding(innerPadding))
             else -> PlaceholderContent(current.label, Modifier.padding(innerPadding))
         }
     }
@@ -114,7 +115,7 @@ fun StartContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
             ) {
                 Text("+ Neue Einheit erfassen", fontSize = 20.sp)
             }
-
+            StartMotivation(entries)
             Text("Letzte Einheiten", fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
             if (entries.isEmpty()) {
                 Text("Noch keine Einheiten. Erfasse deine erste!", fontSize = 18.sp)
