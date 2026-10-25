@@ -73,6 +73,7 @@ fun SportAppScreen() {
         when (current) {
             Screen.Start -> StartContent(db, Modifier.padding(innerPadding))
             Screen.Kalender -> CalendarContent(db, Modifier.padding(innerPadding))
+            Screen.Auswertung -> StatsContent(db, Modifier.padding(innerPadding))
             else -> PlaceholderContent(current.label, Modifier.padding(innerPadding))
         }
     }
