@@ -36,7 +36,7 @@ class MainActivity : ComponentActivity() {
 // Die Bereiche der App (unten in der Leiste)
 enum class Screen(val label: String, val symbol: String) {
     Start("Start", "🏠"),
-    Koerper("Körper", "🫀"),
+    Koerper("Gesundheit", "🫀"),
     Kalender("Kalender", "📅"),
     Auswertung("Auswertung", "📊"),
     Einstellungen("Einstellungen", "⚙️")
