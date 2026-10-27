@@ -1,7 +1,7 @@
 package com.julia.sportapp
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
@@ -28,7 +28,6 @@ private enum class Goal(val label: String, val symbol: String, val color: Color,
     YOGA_MORGENS("Yoga morgens", "🧘", Color(0xFF7E57C2), false),
     YOGA_ABENDS("Yoga abends", "🧘", Color(0xFFAB47BC), false),
     SCHRITTE("10.000 Schritte", "👣", Color(0xFF8D6E63), false),
-    ETAGEN("10 Etagen", "🪜", Color(0xFFFFA000), false),
     HIIT("HIIT (1× Woche)", "🔥", Color(0xFFE53935), true),
     LAUFEN("Laufen (1× Woche)", "🏃", Color(0xFF43A047), true)
 }
@@ -38,7 +37,7 @@ private val NOON: LocalTime = LocalTime.of(12, 0)
 
 private val dayNames = listOf("Mo", "Di", "Mi", "Do", "Fr", "Sa", "So")
 
-// Ist das Ziel an diesem Tag erreicht? null = keine Daten (nur bei Schritten und Etagen)
+// Ist das Ziel an diesem Tag erreicht? null = keine Daten (nur bei Schritten)
 private fun achieved(goal: Goal, day: LocalDate, activities: List<Activity>, values: WeekValues): Boolean? =
     when (goal) {
         Goal.YOGA_MORGENS -> activities.any {
@@ -48,7 +47,6 @@ private fun achieved(goal: Goal, day: LocalDate, activities: List<Activity>, val
             it.type == ActivityType.YOGA && it.date == day && !it.time.isBefore(NOON)
         }
         Goal.SCHRITTE -> values.steps[day]?.let { it >= 10000 }
-        Goal.ETAGEN -> values.floors[day]?.let { it >= 10 }
         Goal.HIIT -> activities.any { it.type == ActivityType.HIIT && it.date == day }
         Goal.LAUFEN -> activities.any { it.type == ActivityType.LAUFEN && it.date == day }
     }
@@ -62,14 +60,14 @@ fun WeeklyGoalCard(activities: List<Activity>) {
     val monday = today.with(DayOfWeek.MONDAY)
     val days = (0..6).map { monday.plusDays(it.toLong()) }
 
-    var values by remember { mutableStateOf(WeekValues(emptyMap(), emptyMap())) }
+    var values by remember { mutableStateOf(WeekValues(emptyMap())) }
     var status by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
     var refreshCount by remember { mutableStateOf(0) }
 
     LaunchedEffect(refreshCount) {
         if (apiKey.isBlank()) {
-            status = "Schritte und Etagen kommen von Garmin. Verbinde Garmin unter Einstellungen."
+            status = "Schritte kommen von Garmin. Verbinde Garmin unter Einstellungen."
         } else {
             loading = true
             val result = withContext(Dispatchers.IO) {
@@ -78,7 +76,7 @@ fun WeeklyGoalCard(activities: List<Activity>) {
             loading = false
             result
                 .onSuccess { values = it; status = "" }
-                .onFailure { status = "Schritte und Etagen konnten nicht geladen werden: ${it.message ?: "Unbekannt"}" }
+                .onFailure { status = "Schritte konnten nicht geladen werden: ${it.message ?: "Unbekannt"}" }
         }
     }
 
