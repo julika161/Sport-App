@@ -1,193 +1,206 @@
 package com.julia.sportapp
 
-import android.content.Context
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.julia.sportapp.data.Activity
-import com.julia.sportapp.data.ActivityDatabase
 import com.julia.sportapp.data.ActivityType
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.time.DayOfWeek
 import java.time.LocalDate
-import java.time.YearMonth
-import java.time.temporal.TemporalAdjusters
+import java.time.LocalTime
 
-// Wochenziel: so viele Einheiten pro Woche
-const val WEEKLY_GOAL = 3
-
-// Ein Abzeichen mit Name, Beschreibung und Status
-data class Badge(
-    val name: String,
-    val description: String,
-    val symbol: String,
-    val unlocked: Boolean
-)
-
-// Montag der Woche, in der das Datum liegt
-fun weekStart(date: LocalDate): LocalDate =
-    date.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
-
-// Wie viele Einheiten in der aktuellen Woche?
-fun thisWeekCount(activities: List<Activity>): Int {
-    val thisWeek = weekStart(LocalDate.now())
-    return activities.count { weekStart(it.date) == thisWeek }
+// Die Ziele der Woche. Jedes Ziel hat eine eigene Farbe.
+private enum class Goal(val label: String, val symbol: String, val color: Color, val weekly: Boolean) {
+    YOGA_MORGENS("Yoga morgens", "🧘", Color(0xFF7E57C2), false),
+    YOGA_ABENDS("Yoga abends", "🧘", Color(0xFFAB47BC), false),
+    SCHRITTE("10.000 Schritte", "👣", Color(0xFF8D6E63), false),
+    ETAGEN("10 Etagen", "🪜", Color(0xFFFFA000), false),
+    HIIT("HIIT (1× Woche)", "🔥", Color(0xFFE53935), true),
+    LAUFEN("Laufen (1× Woche)", "🏃", Color(0xFF43A047), true)
 }
 
-// Längste Serie von aufeinanderfolgenden Wochen mit mindestens einer Einheit
-fun longestWeekStreak(activities: List<Activity>): Int {
-    val weeks = activities.map { weekStart(it.date) }.distinct().sorted()
-    var best = 0
-    var run = 0
-    var prev: LocalDate? = null
-    for (w in weeks) {
-        run = if (prev != null && prev.plusWeeks(1) == w) run + 1 else 1
-        best = maxOf(best, run)
-        prev = w
+// Yoga vor 12 Uhr zählt als morgens, ab 12 Uhr als abends
+private val NOON: LocalTime = LocalTime.of(12, 0)
+
+private val dayNames = listOf("Mo", "Di", "Mi", "Do", "Fr", "Sa", "So")
+
+// Ist das Ziel an diesem Tag erreicht? null = keine Daten (nur bei Schritten und Etagen)
+private fun achieved(goal: Goal, day: LocalDate, activities: List<Activity>, values: WeekValues): Boolean? =
+    when (goal) {
+        Goal.YOGA_MORGENS -> activities.any {
+            it.type == ActivityType.YOGA && it.date == day && it.time.isBefore(NOON)
+        }
+        Goal.YOGA_ABENDS -> activities.any {
+            it.type == ActivityType.YOGA && it.date == day && !it.time.isBefore(NOON)
+        }
+        Goal.SCHRITTE -> values.steps[day]?.let { it >= 10000 }
+        Goal.ETAGEN -> values.floors[day]?.let { it >= 10 }
+        Goal.HIIT -> activities.any { it.type == ActivityType.HIIT && it.date == day }
+        Goal.LAUFEN -> activities.any { it.type == ActivityType.LAUFEN && it.date == day }
     }
-    return best
-}
 
-// Serie in Tagen: zählt rückwärts ab heute (oder gestern, falls heute noch nichts war)
-fun currentDayStreak(activities: List<Activity>): Int {
-    val days = activities.map { it.date }.toSet()
-    var day = LocalDate.now()
-    if (day !in days) day = day.minusDays(1)
-    var count = 0
-    while (day in days) {
-        count++
-        day = day.minusDays(1)
-    }
-    return count
-}
-
-// Alle Abzeichen, berechnet aus den gespeicherten Einheiten
-fun computeBadges(activities: List<Activity>): List<Badge> {
-    val total = activities.size
-    val yoga = activities.count { it.type == ActivityType.YOGA }
-    val runs = activities.count { it.type == ActivityType.LAUFEN }
-    val km = activities.mapNotNull { it.distanceKm }.sum()
-    val bestMonth = activities.groupingBy { YearMonth.from(it.date) }.eachCount().values.maxOrNull() ?: 0
-    val bestWeek = activities.groupingBy { weekStart(it.date) }.eachCount().values.maxOrNull() ?: 0
-    val weeksInRow = longestWeekStreak(activities)
-
-    return listOf(
-        Badge("Erste Einheit", "Du hast deine erste Einheit erfasst.", "🥇", total >= 1),
-        Badge("Wochenziel geschafft", "$WEEKLY_GOAL Einheiten in einer Woche.", "🎯", bestWeek >= WEEKLY_GOAL),
-        Badge("Fleißig im Monat", "10 Einheiten in einem Monat.", "🔥", bestMonth >= 10),
-        Badge("Drei Wochen am Stück", "In 3 Wochen hintereinander mindestens eine Einheit.", "📅", weeksInRow >= 3),
-        Badge("Yoga-Meister", "10 Yoga-Einheiten insgesamt.", "🧘", yoga >= 10),
-        Badge("Läufer", "10 Läufe insgesamt.", "🏃", runs >= 10),
-        Badge("100 Kilometer", "100 km Strecke insgesamt.", "🏅", km >= 100.0)
-    )
-}
-
-// Gespeicherte Liste der Abzeichen, die schon gefeiert wurden
-private const val PREFS_NAME = "sportapp_prefs"
-private const val KEY_SEEN = "seen_badges"
-
-fun loadSeen(context: Context): Set<String> =
-    context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        .getStringSet(KEY_SEEN, emptySet()) ?: emptySet()
-
-fun saveSeen(context: Context, seen: Set<String>) {
-    context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        .edit()
-        .putStringSet(KEY_SEEN, seen)
-        .apply()
-}
-
-// Startbildschirm: Wochenziel, Serie und Feier bei neuem Abzeichen
+// Die Wochenübersicht für den Startbildschirm
 @Composable
-fun StartMotivation(activities: List<Activity>) {
+fun WeeklyGoalCard(activities: List<Activity>) {
     val context = LocalContext.current
-    val badges = computeBadges(activities)
-    var seen by remember { mutableStateOf(loadSeen(context)) }
+    val apiKey = remember { loadApiKey(context) }
+    val today = LocalDate.now()
+    val monday = today.with(DayOfWeek.MONDAY)
+    val days = (0..6).map { monday.plusDays(it.toLong()) }
 
-    // Erstes freigeschaltetes Abzeichen, das noch nicht gefeiert wurde
-    val pending = badges.firstOrNull { it.unlocked && it.name !in seen }
+    var values by remember { mutableStateOf(WeekValues(emptyMap(), emptyMap())) }
+    var status by remember { mutableStateOf("") }
+    var loading by remember { mutableStateOf(false) }
+    var refreshCount by remember { mutableStateOf(0) }
 
-    fun markSeen(name: String) {
-        val updated = seen + name
-        seen = updated
-        saveSeen(context, updated)
+    LaunchedEffect(refreshCount) {
+        if (apiKey.isBlank()) {
+            status = "Schritte und Etagen kommen von Garmin. Verbinde Garmin unter Einstellungen."
+        } else {
+            loading = true
+            val result = withContext(Dispatchers.IO) {
+                runCatching { fetchWeekValues(apiKey, monday, monday.plusDays(6)) }
+            }
+            loading = false
+            result
+                .onSuccess { values = it; status = "" }
+                .onFailure { status = "Schritte und Etagen konnten nicht geladen werden: ${it.message ?: "Unbekannt"}" }
+        }
     }
 
-    if (pending != null) {
-        AlertDialog(
-            onDismissRequest = { markSeen(pending.name) },
-            title = { Text("🎉 Neues Abzeichen!", fontSize = 22.sp) },
-            text = {
-                Text("${pending.symbol} ${pending.name}\n${pending.description}", fontSize = 18.sp)
-            },
-            confirmButton = {
-                Button(onClick = { markSeen(pending.name) }) {
-                    Text("Super!", fontSize = 18.sp)
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Mein Wochenziel", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            Text(
+                "${monday.format(dateFormatter)} bis ${monday.plusDays(6).format(dateFormatter)}",
+                fontSize = 15.sp
+            )
+
+            // Kopfzeile mit den Wochentagen, heute ist hervorgehoben
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Spacer(modifier = Modifier.width(120.dp))
+                days.forEachIndexed { index, day ->
+                    Text(
+                        dayNames[index],
+                        fontSize = 14.sp,
+                        fontWeight = if (day == today) FontWeight.Bold else FontWeight.Normal,
+                        color = if (day == today) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.weight(1f)
+                    )
                 }
             }
-        )
-    }
 
-    val done = thisWeekCount(activities)
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Text("Wochenziel", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-            Text("$done von $WEEKLY_GOAL Einheiten diese Woche", fontSize = 18.sp)
-            CountBar(fraction = (done.toFloat() / WEEKLY_GOAL).coerceAtMost(1f))
-            Text("🔥 Serie: ${currentDayStreak(activities)} Tage in Folge", fontSize = 18.sp)
-        }
-    }
-}
-
-// Der Abzeichen-Bereich: alle Abzeichen, freigeschaltet oder gesperrt
-@Composable
-fun BadgesContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
-    val activities = remember { db.getAll() }
-    val badges = computeBadges(activities)
-    val unlockedCount = badges.count { it.unlocked }
-
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Text("Abzeichen", fontSize = 30.sp, fontWeight = FontWeight.Bold)
-        Text("$unlockedCount von ${badges.size} freigeschaltet", fontSize = 20.sp)
-        CountBar(fraction = unlockedCount.toFloat() / badges.size)
-        badges.forEach { BadgeCard(it) }
-    }
-}
-
-// Eine Karte für ein Abzeichen
-@Composable
-fun BadgeCard(badge: Badge) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Text(if (badge.unlocked) badge.symbol else "🔒", fontSize = 32.sp)
-            Column {
-                Text(badge.name, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-                Text(badge.description, fontSize = 16.sp)
-                Text(
-                    if (badge.unlocked) "Freigeschaltet" else "Noch nicht erreicht",
-                    fontSize = 14.sp
-                )
+            Goal.entries.forEach { goal ->
+                GoalRow(goal, days, today, activities, values)
             }
+
+            if (loading) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+            if (status.isNotEmpty()) {
+                Text(status, fontSize = 14.sp)
+            }
+
+            OutlinedButton(
+                onClick = { refreshCount++ },
+                enabled = !loading,
+                modifier = Modifier.fillMaxWidth().height(52.dp)
+            ) {
+                Text("Aktualisieren", fontSize = 18.sp)
+            }
+
+            Text(
+                "Farbiger Kreis mit ✓ = geschafft · grau ✗ = verpasst · leer = noch nicht dran · ? = keine Garmin-Daten",
+                fontSize = 13.sp
+            )
         }
+    }
+}
+
+// Eine Zeile pro Ziel: Name, Zusammenfassung und ein Kreis pro Tag
+@Composable
+private fun GoalRow(
+    goal: Goal,
+    days: List<LocalDate>,
+    today: LocalDate,
+    activities: List<Activity>,
+    values: WeekValues
+) {
+    val pastDays = days.filter { !it.isAfter(today) }
+    val done = pastDays.count { achieved(goal, it, activities, values) == true }
+    val summary = if (goal.weekly) {
+        if (done > 0) "✓ geschafft" else "noch offen"
+    } else {
+        "$done von ${pastDays.size} Tagen"
+    }
+
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.width(120.dp)) {
+            Text("${goal.symbol} ${goal.label}", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+            Text(summary, fontSize = 13.sp)
+        }
+        days.forEach { day ->
+            DayCircle(
+                value = if (day.isAfter(today)) null else achieved(goal, day, activities, values),
+                future = day.isAfter(today),
+                isToday = day == today,
+                color = goal.color,
+                modifier = Modifier.weight(1f)
+            )
+        }
+    }
+}
+
+// Ein Kreis pro Tag: farbig mit ✓ = geschafft, grau mit ✗ = verpasst, leer = noch offen
+@Composable
+private fun DayCircle(
+    value: Boolean?,
+    future: Boolean,
+    isToday: Boolean,
+    color: Color,
+    modifier: Modifier
+) {
+    val done = value == true
+    val text = when {
+        done -> "✓"
+        future -> ""
+        value == null -> "?"
+        isToday -> ""
+        else -> "✗"
+    }
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier
+            .padding(2.dp)
+            .aspectRatio(1f)
+            .clip(CircleShape)
+            .background(if (done) color else Color.Transparent)
+            .border(
+                width = if (isToday) 2.dp else 1.dp,
+                color = if (isToday) MaterialTheme.colorScheme.primary else Color.LightGray,
+                shape = CircleShape
+            )
+    ) {
+        Text(
+            text,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Bold,
+            color = if (done) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
