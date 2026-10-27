@@ -8,7 +8,7 @@ import java.time.LocalDate
 import java.time.LocalTime
 
 // Speichert die Einheiten dauerhaft auf dem Handy
-class ActivityDatabase(context: Context) : SQLiteOpenHelper(context, "sportapp.db", null, 1) {
+class ActivityDatabase(context: Context) : SQLiteOpenHelper(context, "sportapp.db", null, 2) {
 
     // Wird beim ersten Start einmal ausgeführt: Tabelle anlegen
     override fun onCreate(db: SQLiteDatabase) {
@@ -19,14 +19,17 @@ class ActivityDatabase(context: Context) : SQLiteOpenHelper(context, "sportapp.d
                 date TEXT NOT NULL,
                 time TEXT NOT NULL,
                 durationMinutes INTEGER NOT NULL,
-                distanceKm REAL
+                distanceKm REAL,
+                garminId TEXT
             )"""
         )
     }
 
+    // Version 1 -> 2: nur eine Spalte ergänzen, bestehende Einträge bleiben erhalten
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        db.execSQL("DROP TABLE IF EXISTS activities")
-        onCreate(db)
+        if (oldVersion < 2) {
+            db.execSQL("ALTER TABLE activities ADD COLUMN garminId TEXT")
+        }
     }
 
     // Eine neue Einheit speichern
@@ -37,6 +40,7 @@ class ActivityDatabase(context: Context) : SQLiteOpenHelper(context, "sportapp.d
             put("time", activity.time.toString())
             put("durationMinutes", activity.durationMinutes)
             put("distanceKm", activity.distanceKm)
+            put("garminId", activity.garminId)
         }
         writableDatabase.insert("activities", null, values)
     }
@@ -45,7 +49,7 @@ class ActivityDatabase(context: Context) : SQLiteOpenHelper(context, "sportapp.d
     fun getAll(): List<Activity> {
         val result = mutableListOf<Activity>()
         readableDatabase.rawQuery(
-            "SELECT type, date, time, durationMinutes, distanceKm FROM activities ORDER BY date DESC, time DESC",
+            "SELECT type, date, time, durationMinutes, distanceKm, garminId FROM activities ORDER BY date DESC, time DESC",
             null
         ).use { cursor ->
             while (cursor.moveToNext()) {
@@ -55,7 +59,8 @@ class ActivityDatabase(context: Context) : SQLiteOpenHelper(context, "sportapp.d
                         date = LocalDate.parse(cursor.getString(1)),
                         time = LocalTime.parse(cursor.getString(2)),
                         durationMinutes = cursor.getInt(3),
-                        distanceKm = if (cursor.isNull(4)) null else cursor.getDouble(4)
+                        distanceKm = if (cursor.isNull(4)) null else cursor.getDouble(4),
+                        garminId = if (cursor.isNull(5)) null else cursor.getString(5)
                     )
                 )
             }
@@ -63,4 +68,3 @@ class ActivityDatabase(context: Context) : SQLiteOpenHelper(context, "sportapp.d
         return result
     }
 }
-
