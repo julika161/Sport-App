@@ -86,8 +86,6 @@ fun StartContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
     ) {
         Text("Sport App", fontSize = 36.sp, fontWeight = FontWeight.Bold)
 
-        Text("Hallo Julia! Bereit für deine nächste Einheit?", fontSize = 20.sp)
-
         DailyOverview()
 
         WeeklyGoalCard(entries)
