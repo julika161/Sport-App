@@ -8,10 +8,9 @@ import java.time.LocalDate
 
 private const val GARMIN_WEEK_API = "https://personal.connectapi.garmin.com"
 
-// Schritte und Etagen je Tag für einen Zeitraum (nur Tage mit Werten sind enthalten)
+// Schritte je Tag für einen Zeitraum (nur Tage mit Werten sind enthalten)
 data class WeekValues(
-    val steps: Map<LocalDate, Int>,
-    val floors: Map<LocalDate, Int>
+    val steps: Map<LocalDate, Int>
 )
 
 // Zugriffstoken aus dem Personal-API-Schlüssel holen
@@ -52,17 +51,13 @@ private fun weekGet(token: String, path: String): String {
     }
 }
 
-// Datum aus einem Eintrag lesen, ungültige Einträge werden übersprungen
-private fun dayOf(item: JSONObject): LocalDate? =
-    runCatching { LocalDate.parse(item.optString("calendarDate")) }.getOrNull()
-
 // Schritte je Tag aus der Garmin-Tagesstatistik
 private fun parseSteps(text: String): Map<LocalDate, Int> {
     val array = JSONArray(text.trim())
     val result = mutableMapOf<LocalDate, Int>()
     for (i in 0 until array.length()) {
         val item = array.optJSONObject(i) ?: continue
-        val day = dayOf(item) ?: continue
+        val day = runCatching { LocalDate.parse(item.optString("calendarDate")) }.getOrNull() ?: continue
         if (item.has("totalSteps") && !item.isNull("totalSteps")) {
             result[day] = item.optInt("totalSteps")
         }
@@ -70,26 +65,7 @@ private fun parseSteps(text: String): Map<LocalDate, Int> {
     return result
 }
 
-// Etagen je Tag aus den Tageszusammenfassungen (Liste oder Objekt mit Liste)
-private fun parseFloors(text: String): Map<LocalDate, Int> {
-    val trimmed = text.trim()
-    val array = if (trimmed.startsWith("[")) {
-        JSONArray(trimmed)
-    } else {
-        JSONObject(trimmed).optJSONArray("dailySummaries") ?: JSONArray()
-    }
-    val result = mutableMapOf<LocalDate, Int>()
-    for (i in 0 until array.length()) {
-        val item = array.optJSONObject(i) ?: continue
-        val day = dayOf(item) ?: continue
-        if (item.has("floorsAscended") && !item.isNull("floorsAscended")) {
-            result[day] = item.optDouble("floorsAscended").toInt()
-        }
-    }
-    return result
-}
-
-// Holt Schritte und Etagen für einen Zeitraum. Schlägt ein Teil fehl, bleibt er leer.
+// Holt die Schritte für einen Zeitraum. Schlägt der Abruf fehl, bleibt die Liste leer.
 fun fetchWeekValues(apiKey: String, start: LocalDate, end: LocalDate): WeekValues {
     val token = weekToken(apiKey)
     val from = start.toString()
@@ -97,8 +73,5 @@ fun fetchWeekValues(apiKey: String, start: LocalDate, end: LocalDate): WeekValue
     val steps = runCatching {
         parseSteps(weekGet(token, "/usersummary-service/stats/steps/daily/$from/$to"))
     }.getOrDefault(emptyMap())
-    val floors = runCatching {
-        parseFloors(weekGet(token, "/usersummary-service/v2/dailysummaries?startDate=$from&endDate=$to"))
-    }.getOrDefault(emptyMap())
-    return WeekValues(steps = steps, floors = floors)
+    return WeekValues(steps = steps)
 }
