@@ -117,6 +117,7 @@ fun StartContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
                 Text("+ Neue Einheit erfassen", fontSize = 20.sp)
             }
             StartMotivation(entries)
+            GarminSyncCard(db) { entries = db.getAll() }
             Text("Letzte Einheiten", fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
             if (entries.isEmpty()) {
                 Text("Noch keine Einheiten. Erfasse deine erste!", fontSize = 18.sp)
