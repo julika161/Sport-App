@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -24,19 +25,26 @@ import kotlinx.coroutines.withContext
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalTime
+import java.time.Year
 import java.time.format.DateTimeFormatter
 
-// Die Ziele der Woche. Jedes Ziel hat eine eigene Farbe.
+// Die Ziele. Jedes Ziel hat eine eigene Farbe.
 private enum class Goal(val label: String, val symbol: String, val color: Color, val weekly: Boolean) {
     YOGA_MORGENS("Yoga morgens", "🧘", Color(0xFF7E57C2), false),
     YOGA_ABENDS("Yoga abends", "🧘", Color(0xFFAB47BC), false),
     SCHRITTE("10.000 Schritte", "👣", Color(0xFF8D6E63), false),
-    HIIT("HIIT (1× Woche)", "🔥", Color(0xFFE53935), true),
+    HIIT("HIIT (1× Woche)", "🔥", Color(0xFF1E88E5), true),
     LAUFEN("Laufen (1× Woche)", "🏃", Color(0xFF43A047), true)
 }
 
 // Yoga vor 12 Uhr zählt als morgens, ab 12 Uhr als abends
 private val NOON: LocalTime = LocalTime.of(12, 0)
+
+// Wochenziel "1× pro Woche" ergibt im Jahr 52 Mal
+private const val WEEKS_TARGET = 52
+
+// Schritte für ein Jahr werden in Stücken von 28 Tagen geholt
+private const val CHUNK_DAYS = 28L
 
 private val dayNames = listOf("Mo", "Di", "Mi", "Do", "Fr", "Sa", "So")
 private val shortDate: DateTimeFormatter = DateTimeFormatter.ofPattern("dd.MM.")
@@ -56,6 +64,51 @@ private fun achieved(goal: Goal, day: LocalDate, activities: List<Activity>, val
         Goal.LAUFEN -> activities.any { it.type == ActivityType.LAUFEN && it.date == day }
     }
 
+// Ergebnis eines Ziels für ein Jahr
+private data class YearStat(val goal: Goal, val done: Int, val target: Int, val elapsed: Int)
+
+// Alle Tage eines Jahres
+private fun weekDaysOfYear(year: Int): List<LocalDate> {
+    val first = LocalDate.of(year, 1, 1)
+    return (0 until Year.of(year).length()).map { first.plusDays(it.toLong()) }
+}
+
+// Jahresauswertung: wie oft ein Ziel bisher erreicht wurde (nur vergangene Tage bzw. Wochen)
+private fun yearStat(
+    goal: Goal,
+    year: Int,
+    today: LocalDate,
+    activities: List<Activity>,
+    steps: Map<LocalDate, Int>
+): YearStat {
+    val values = WeekValues(steps)
+    val allDays = weekDaysOfYear(year)
+    return if (goal.weekly) {
+        val mondays = allDays.filter { it.dayOfWeek == DayOfWeek.MONDAY }
+        val done = mondays.count { monday ->
+            (0..6).any { achieved(goal, monday.plusDays(it.toLong()), activities, values) == true }
+        }
+        YearStat(goal, done, WEEKS_TARGET, mondays.count { !it.isAfter(today) })
+    } else {
+        val past = allDays.filter { !it.isAfter(today) }
+        val done = past.count { achieved(goal, it, activities, values) == true }
+        YearStat(goal, done, Year.of(year).length(), past.size)
+    }
+}
+
+// Schritte für ein ganzes Jahr (bis heute) in Stücken holen
+private fun fetchYearSteps(apiKey: String, start: LocalDate, end: LocalDate): Map<LocalDate, Int> {
+    val result = mutableMapOf<LocalDate, Int>()
+    var from = start
+    while (!from.isAfter(end)) {
+        val candidate = from.plusDays(CHUNK_DAYS - 1)
+        val to = if (candidate.isAfter(end)) end else candidate
+        result.putAll(fetchWeekValues(apiKey, from, to).steps)
+        from = to.plusDays(1)
+    }
+    return result
+}
+
 // Startseite: Wochenziel mit Navigation zu vergangenen Wochen (vorwärts bis zur aktuellen Woche)
 @Composable
 fun WeeklyGoalContent(activities: List<Activity>, modifier: Modifier = Modifier) {
@@ -74,9 +127,14 @@ fun WeeklyGoalContent(activities: List<Activity>, modifier: Modifier = Modifier)
     var values by remember { mutableStateOf(WeekValues(emptyMap())) }
     var status by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
-    var refreshCount by remember { mutableStateOf(0) }
 
-    LaunchedEffect(monday, refreshCount) {
+    // Jahresauswertung: 0 = aktuelles Jahr, Zurückblättern in frühere Jahre
+    var year by remember { mutableStateOf(today.year) }
+    var yearSteps by remember { mutableStateOf<Map<LocalDate, Int>>(emptyMap()) }
+    var yearLoading by remember { mutableStateOf(false) }
+    var yearStatus by remember { mutableStateOf("") }
+
+    LaunchedEffect(monday) {
         if (apiKey.isBlank()) {
             status = "Schritte kommen von Garmin. Verbinde Garmin unter Einstellungen."
         } else {
@@ -91,6 +149,31 @@ fun WeeklyGoalContent(activities: List<Activity>, modifier: Modifier = Modifier)
         }
     }
 
+    LaunchedEffect(year) {
+        if (apiKey.isNotBlank()) {
+            yearLoading = true
+            val end = if (year == today.year) today else LocalDate.of(year, 12, 31)
+            val result = withContext(Dispatchers.IO) {
+                runCatching { fetchYearSteps(apiKey, LocalDate.of(year, 1, 1), end) }
+            }
+            yearLoading = false
+            result
+                .onSuccess { yearSteps = it; yearStatus = "" }
+                .onFailure { yearStatus = "Schritte fürs Jahr konnten nicht geladen werden: ${it.message ?: "Unbekannt"}" }
+        }
+    }
+
+    // Haken pro Tag (nur vergangene und heutige Tage)
+    val dayCounts: List<Int?> = days.map { day ->
+        if (day.isAfter(today)) null
+        else Goal.entries.count { goal -> achieved(goal, day, activities, values) == true }
+    }
+    val weekTotal = dayCounts.filterNotNull().sum()
+
+    val yearStats = Goal.entries.map { goal ->
+        yearStat(goal, year, today, activities, yearSteps + values.steps)
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -98,6 +181,7 @@ fun WeeklyGoalContent(activities: List<Activity>, modifier: Modifier = Modifier)
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        // Seitentitel: 28 sp, fett (einheitlich auf allen Seiten)
         Text("Mein Wochenziel", fontSize = 28.sp, fontWeight = FontWeight.Bold)
 
         // Wochen-Navigation
@@ -125,6 +209,7 @@ fun WeeklyGoalContent(activities: List<Activity>, modifier: Modifier = Modifier)
             }
         }
 
+        // Wochenübersicht
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 // Kopfzeile mit Wochentag und Datum, heute ist hervorgehoben
@@ -158,19 +243,91 @@ fun WeeklyGoalContent(activities: List<Activity>, modifier: Modifier = Modifier)
                     GoalRow(goal, days, today, activities, values)
                 }
 
+                // Anzahl der Haken pro Tag und Summe der Woche
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        "✓ Haken pro Tag",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.width(labelWidth)
+                    )
+                    dayCounts.forEach { count ->
+                        Text(
+                            count?.toString() ?: "",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+                Text("Summe der Woche: $weekTotal Haken", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+
                 if (loading) {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 }
                 if (status.isNotEmpty()) {
-                    Text(status, fontSize = 16.sp)
+                    Text(status, fontSize = 14.sp)
+                }
+            }
+        }
+
+        // Jahresübersicht mit Zurückblättern in frühere Jahre
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Jahresziele", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedButton(onClick = { year-- }) {
+                            Text("‹", fontSize = 16.sp)
+                        }
+                        Text(
+                            "$year",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 12.dp)
+                        )
+                        OutlinedButton(onClick = { year++ }, enabled = year < today.year) {
+                            Text("›", fontSize = 16.sp)
+                        }
+                    }
                 }
 
-                OutlinedButton(
-                    onClick = { refreshCount++ },
-                    enabled = !loading,
-                    modifier = Modifier.fillMaxWidth().height(52.dp)
-                ) {
-                    Text("Aktualisieren", fontSize = 16.sp)
+                if (yearLoading) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+                if (yearStatus.isNotEmpty()) {
+                    Text(yearStatus, fontSize = 14.sp)
+                }
+
+                yearStats.forEach { s ->
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("${s.goal.symbol} ${s.goal.label}", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                if (s.goal.weekly) "${s.done} von ${s.elapsed} Wochen"
+                                else "${s.done} von ${s.elapsed} Tagen",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Text(
+                            if (s.goal.weekly) "Ziel: ${s.target} Mal im Jahr"
+                            else "Ziel: ${s.target} Tage im Jahr",
+                            fontSize = 14.sp
+                        )
+                        GoalBar(
+                            fraction = if (s.target == 0) 0f else s.done.toFloat() / s.target,
+                            color = s.goal.color
+                        )
+                    }
                 }
             }
         }
@@ -248,6 +405,25 @@ private fun DayCircle(
             fontSize = 14.sp,
             fontWeight = FontWeight.Bold,
             color = if (done) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+// Fortschrittsbalken in der Farbe des Ziels
+@Composable
+private fun GoalBar(fraction: Float, color: Color) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(10.dp)
+            .clip(RoundedCornerShape(5.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(fraction.coerceIn(0f, 1f))
+                .fillMaxHeight()
+                .background(color)
         )
     }
 }
