@@ -107,7 +107,7 @@ fun WeeklyGoalContent(activities: List<Activity>, modifier: Modifier = Modifier)
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             OutlinedButton(onClick = { weekOffset-- }) {
-                Text("‹ Zurück", fontSize = 18.sp)
+                Text("‹ Zurück", fontSize = 16.sp)
             }
             Column(
                 modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
@@ -121,7 +121,7 @@ fun WeeklyGoalContent(activities: List<Activity>, modifier: Modifier = Modifier)
                 Text(if (isCurrentWeek) "Diese Woche" else "Rückblick", fontSize = 14.sp)
             }
             OutlinedButton(onClick = { weekOffset++ }, enabled = !isCurrentWeek) {
-                Text("Weiter ›", fontSize = 18.sp)
+                Text("Weiter ›", fontSize = 16.sp)
             }
         }
 
@@ -170,7 +170,7 @@ fun WeeklyGoalContent(activities: List<Activity>, modifier: Modifier = Modifier)
                     enabled = !loading,
                     modifier = Modifier.fillMaxWidth().height(52.dp)
                 ) {
-                    Text("Aktualisieren", fontSize = 18.sp)
+                    Text("Aktualisieren", fontSize = 16.sp)
                 }
             }
         }
