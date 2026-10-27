@@ -72,7 +72,7 @@ fun SportAppScreen() {
     }
 }
 
-// Startbildschirm: Tageswerte von Garmin, Motivation und letzte Einheiten
+// Startbildschirm: Tageswerte von Garmin, darunter das Wochenziel
 @Composable
 fun StartContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
     val entries = remember { db.getAll() }
@@ -90,20 +90,11 @@ fun StartContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
 
         DailyOverview()
 
-        StartMotivation(entries)
-
-        Text("Letzte Einheiten", fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
-        if (entries.isEmpty()) {
-            Text(
-                "Noch keine Einheiten. Verbinde Garmin unter Einstellungen und synchronisiere.",
-                fontSize = 18.sp
-            )
-        }
-        entries.take(5).forEach { ActivityRow(it) }
+        WeeklyGoalCard(entries)
     }
 }
 
-// Eine Zeile in der Liste der letzten Einheiten
+// Eine Zeile in einer Liste von Einheiten (z. B. im Kalender)
 @Composable
 fun ActivityRow(a: Activity) {
     val km = a.distanceKm?.let { " · %.1f km".format(it) } ?: ""
