@@ -19,8 +19,35 @@ import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-// Auswertung für eine Sportart: Anzahl Einheiten und Anzahl verschiedener Tage
-private data class TypeStat(val type: ActivityType, val count: Int, val days: Int)
+// Ansicht der Auswertung: Anzahl der Einheiten oder Strecke bzw. Minuten
+private enum class Metric { COUNT, VALUE }
+
+// Diese Sportarten werden in Kilometern gezählt, alle anderen in Minuten
+private val distanceTypes = setOf(ActivityType.LAUFEN, ActivityType.RADFAHREN, ActivityType.WALKEN)
+
+// Auswertung für eine Sportart
+private data class TypeStat(
+    val type: ActivityType,
+    val count: Int,
+    val days: Int,
+    val km: Double,
+    val minutes: Int
+)
+
+// Zahl für Sortierung und Balken, je nach Ansicht
+private fun statValue(s: TypeStat, metric: Metric): Double = when (metric) {
+    Metric.COUNT -> s.count.toDouble()
+    Metric.VALUE -> if (s.type in distanceTypes) s.km else s.minutes.toDouble()
+}
+
+// Text für die Zeile, je nach Ansicht
+private fun statLabel(s: TypeStat, metric: Metric): String = when (metric) {
+    Metric.COUNT -> "${s.count}×"
+    Metric.VALUE -> if (s.type in distanceTypes) "%.1f km".format(s.km) else formatMinutes(s.minutes)
+}
+
+private fun formatMinutes(total: Int): String =
+    if (total >= 60) "${total / 60} Std. ${total % 60} Min." else "$total Min."
 
 // Der Auswertungs-Bereich: Monat oder Jahr, mit Zusammenfassung und Sportarten
 @Composable
@@ -29,6 +56,7 @@ fun StatsContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
 
     var byMonth by remember { mutableStateOf(true) }
     var period by remember { mutableStateOf(YearMonth.now()) }
+    var metric by remember { mutableStateOf(Metric.COUNT) }
 
     val title = if (byMonth) {
         period.format(DateTimeFormatter.ofPattern("MMMM yyyy", Locale.GERMAN))
@@ -47,10 +75,16 @@ fun StatsContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
     val stats = ActivityType.entries
         .map { type ->
             val list = filtered.filter { it.type == type }
-            TypeStat(type, list.size, list.map { it.date }.distinct().size)
+            TypeStat(
+                type = type,
+                count = list.size,
+                days = list.map { it.date }.distinct().size,
+                km = list.mapNotNull { it.distanceKm }.sum(),
+                minutes = list.sumOf { it.durationMinutes }
+            )
         }
-        .sortedByDescending { it.count }
-    val maxCount = stats.maxOfOrNull { it.count } ?: 0
+        .sortedByDescending { statValue(it, metric) }
+    val maxValue = stats.maxOfOrNull { statValue(it, metric) } ?: 0.0
 
     Column(
         modifier = modifier
@@ -104,12 +138,35 @@ fun StatsContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text("Gesamt", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
                 Text("${filtered.size} Einheiten", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                Text(
-                    "${totalMinutes / 60} Std. ${totalMinutes % 60} Min. Trainingszeit",
-                    fontSize = 16.sp
-                )
+                Text("${formatMinutes(totalMinutes)} Trainingszeit", fontSize = 16.sp)
                 Text("%.1f km Strecke".format(totalKm), fontSize = 16.sp)
             }
+        }
+
+        // Umschalten: Anzahl oder Kilometer/Minuten
+        Text("Anzeigen als", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            ChoiceButton(
+                text = "Anzahl",
+                selected = metric == Metric.COUNT,
+                onClick = { metric = Metric.COUNT },
+                modifier = Modifier.weight(1f)
+            )
+            ChoiceButton(
+                text = "Km / Minuten",
+                selected = metric == Metric.VALUE,
+                onClick = { metric = Metric.VALUE },
+                modifier = Modifier.weight(1f)
+            )
+        }
+        if (metric == Metric.VALUE) {
+            Text(
+                "Laufen, Radfahren und Walken in Kilometern, die anderen Sportarten in Minuten.",
+                fontSize = 14.sp
+            )
         }
 
         // Pro Sportart
@@ -125,13 +182,18 @@ fun StatsContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text("${s.type.symbol} ${s.type.label}", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-                    Text("${s.count}×", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Text(statLabel(s, metric), fontSize = 18.sp, fontWeight = FontWeight.Bold)
                 }
                 Text(
                     "an ${s.days} ${if (s.days == 1) "Tag" else "Tagen"}",
                     fontSize = 14.sp
                 )
-                CountBar(fraction = if (maxCount == 0) 0f else s.count.toFloat() / maxCount)
+                if (metric == Metric.VALUE && s.type in distanceTypes && s.count > 0 && s.km == 0.0) {
+                    Text("Keine Strecke erfasst.", fontSize = 14.sp)
+                }
+                CountBar(
+                    fraction = if (maxValue == 0.0) 0f else (statValue(s, metric) / maxValue).toFloat()
+                )
             }
         }
     }
