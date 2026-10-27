@@ -4,12 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import com.julia.sportapp.data.Activity
-import com.julia.sportapp.data.ActivityDatabase
-import com.julia.sportapp.ui.theme.SportAppTheme
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -17,6 +12,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.julia.sportapp.data.Activity
+import com.julia.sportapp.data.ActivityDatabase
+import com.julia.sportapp.ui.theme.SportAppTheme
 import java.time.format.DateTimeFormatter
 
 // Datums- und Zeitformate für die Anzeige (deutsch)
@@ -35,9 +33,10 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// Die vier Bereiche der App (unten in der Leiste)
+// Die Bereiche der App (unten in der Leiste)
 enum class Screen(val label: String, val symbol: String) {
     Start("Start", "🏠"),
+    Koerper("Körper", "🫀"),
     Kalender("Kalender", "📅"),
     Auswertung("Auswertung", "📊"),
     Einstellungen("Einstellungen", "⚙️")
@@ -65,6 +64,7 @@ fun SportAppScreen() {
     ) { innerPadding ->
         when (current) {
             Screen.Start -> StartContent(db, Modifier.padding(innerPadding))
+            Screen.Koerper -> BodyContent(Modifier.padding(innerPadding))
             Screen.Kalender -> CalendarContent(db, Modifier.padding(innerPadding))
             Screen.Auswertung -> StatsContent(db, Modifier.padding(innerPadding))
             Screen.Einstellungen -> SettingsContent(db, Modifier.padding(innerPadding))
@@ -72,24 +72,11 @@ fun SportAppScreen() {
     }
 }
 
-// Startbildschirm: Tageswerte von Garmin, darunter das Wochenziel
+// Startbildschirm: nur das Wochenziel
 @Composable
 fun StartContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
     val entries = remember { db.getAll() }
-
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        Text("Sport App", fontSize = 36.sp, fontWeight = FontWeight.Bold)
-
-        DailyOverview()
-
-        WeeklyGoalCard(entries)
-    }
+    WeeklyGoalContent(entries, modifier)
 }
 
 // Eine Zeile in einer Liste von Einheiten (z. B. im Kalender)
