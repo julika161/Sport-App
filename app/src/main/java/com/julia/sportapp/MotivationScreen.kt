@@ -1,9 +1,11 @@
 package com.julia.sportapp
 
-import androidx.compose.foundation.border
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -22,6 +24,7 @@ import kotlinx.coroutines.withContext
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalTime
+import java.time.format.DateTimeFormatter
 
 // Die Ziele der Woche. Jedes Ziel hat eine eigene Farbe.
 private enum class Goal(val label: String, val symbol: String, val color: Color, val weekly: Boolean) {
@@ -36,6 +39,8 @@ private enum class Goal(val label: String, val symbol: String, val color: Color,
 private val NOON: LocalTime = LocalTime.of(12, 0)
 
 private val dayNames = listOf("Mo", "Di", "Mi", "Do", "Fr", "Sa", "So")
+private val shortDate: DateTimeFormatter = DateTimeFormatter.ofPattern("dd.MM.")
+private val labelWidth = 140.dp
 
 // Ist das Ziel an diesem Tag erreicht? null = keine Daten (nur bei Schritten)
 private fun achieved(goal: Goal, day: LocalDate, activities: List<Activity>, values: WeekValues): Boolean? =
@@ -51,27 +56,33 @@ private fun achieved(goal: Goal, day: LocalDate, activities: List<Activity>, val
         Goal.LAUFEN -> activities.any { it.type == ActivityType.LAUFEN && it.date == day }
     }
 
-// Die Wochenübersicht für den Startbildschirm
+// Startseite: Wochenziel mit Navigation zu vergangenen Wochen (vorwärts bis zur aktuellen Woche)
 @Composable
-fun WeeklyGoalCard(activities: List<Activity>) {
+fun WeeklyGoalContent(activities: List<Activity>, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val apiKey = remember { loadApiKey(context) }
     val today = LocalDate.now()
-    val monday = today.with(DayOfWeek.MONDAY)
+    val thisMonday = today.with(DayOfWeek.MONDAY)
+
+    // 0 = aktuelle Woche, -1 = letzte Woche, usw.
+    var weekOffset by remember { mutableStateOf(0) }
+    val monday = thisMonday.plusWeeks(weekOffset.toLong())
+    val sunday = monday.plusDays(6)
     val days = (0..6).map { monday.plusDays(it.toLong()) }
+    val isCurrentWeek = weekOffset == 0
 
     var values by remember { mutableStateOf(WeekValues(emptyMap())) }
     var status by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
     var refreshCount by remember { mutableStateOf(0) }
 
-    LaunchedEffect(refreshCount) {
+    LaunchedEffect(monday, refreshCount) {
         if (apiKey.isBlank()) {
             status = "Schritte kommen von Garmin. Verbinde Garmin unter Einstellungen."
         } else {
             loading = true
             val result = withContext(Dispatchers.IO) {
-                runCatching { fetchWeekValues(apiKey, monday, monday.plusDays(6)) }
+                runCatching { fetchWeekValues(apiKey, monday, sunday) }
             }
             loading = false
             result
@@ -80,52 +91,88 @@ fun WeeklyGoalCard(activities: List<Activity>) {
         }
     }
 
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Mein Wochenziel", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-            Text(
-                "${monday.format(dateFormatter)} bis ${monday.plusDays(6).format(dateFormatter)}",
-                fontSize = 15.sp
-            )
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text("Mein Wochenziel", fontSize = 28.sp, fontWeight = FontWeight.Bold)
 
-            // Kopfzeile mit den Wochentagen, heute ist hervorgehoben
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Spacer(modifier = Modifier.width(120.dp))
-                days.forEachIndexed { index, day ->
-                    Text(
-                        dayNames[index],
-                        fontSize = 14.sp,
-                        fontWeight = if (day == today) FontWeight.Bold else FontWeight.Normal,
-                        color = if (day == today) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.weight(1f)
-                    )
+        // Wochen-Navigation
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            OutlinedButton(onClick = { weekOffset-- }) {
+                Text("‹ Zurück", fontSize = 18.sp)
+            }
+            Column(
+                modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    "${monday.format(shortDate)} – ${sunday.format(dateFormatter)}",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(if (isCurrentWeek) "Diese Woche" else "Rückblick", fontSize = 14.sp)
+            }
+            OutlinedButton(onClick = { weekOffset++ }, enabled = !isCurrentWeek) {
+                Text("Weiter ›", fontSize = 18.sp)
+            }
+        }
+
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                // Kopfzeile mit Wochentag und Datum, heute ist hervorgehoben
+                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Spacer(modifier = Modifier.width(labelWidth))
+                    days.forEachIndexed { index, day ->
+                        val isToday = day == today
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                dayNames[index],
+                                fontSize = 14.sp,
+                                fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal,
+                                color = if (isToday) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                textAlign = TextAlign.Center
+                            )
+                            Text(
+                                day.dayOfMonth.toString(),
+                                fontSize = 14.sp,
+                                fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal,
+                                color = if (isToday) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+                }
+
+                Goal.entries.forEach { goal ->
+                    GoalRow(goal, days, today, activities, values)
+                }
+
+                if (loading) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+                if (status.isNotEmpty()) {
+                    Text(status, fontSize = 16.sp)
+                }
+
+                OutlinedButton(
+                    onClick = { refreshCount++ },
+                    enabled = !loading,
+                    modifier = Modifier.fillMaxWidth().height(52.dp)
+                ) {
+                    Text("Aktualisieren", fontSize = 18.sp)
                 }
             }
-
-            Goal.entries.forEach { goal ->
-                GoalRow(goal, days, today, activities, values)
-            }
-
-            if (loading) {
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-            }
-            if (status.isNotEmpty()) {
-                Text(status, fontSize = 14.sp)
-            }
-
-            OutlinedButton(
-                onClick = { refreshCount++ },
-                enabled = !loading,
-                modifier = Modifier.fillMaxWidth().height(52.dp)
-            ) {
-                Text("Aktualisieren", fontSize = 18.sp)
-            }
-
-            Text(
-                "Farbiger Kreis mit ✓ = geschafft · grau ✗ = verpasst · leer = noch nicht dran · ? = keine Garmin-Daten",
-                fontSize = 13.sp
-            )
         }
     }
 }
@@ -141,16 +188,18 @@ private fun GoalRow(
 ) {
     val pastDays = days.filter { !it.isAfter(today) }
     val done = pastDays.count { achieved(goal, it, activities, values) == true }
-    val summary = if (goal.weekly) {
-        if (done > 0) "✓ geschafft" else "noch offen"
-    } else {
-        "$done von ${pastDays.size} Tagen"
+    val weekOver = days.last().isBefore(today)
+    val summary = when {
+        !goal.weekly -> "$done von ${pastDays.size} Tagen"
+        done > 0 -> "✓ geschafft"
+        weekOver -> "nicht geschafft"
+        else -> "noch offen"
     }
 
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.width(120.dp)) {
-            Text("${goal.symbol} ${goal.label}", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-            Text(summary, fontSize = 13.sp)
+        Column(modifier = Modifier.width(labelWidth)) {
+            Text("${goal.symbol} ${goal.label}", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            Text(summary, fontSize = 14.sp)
         }
         days.forEach { day ->
             DayCircle(
