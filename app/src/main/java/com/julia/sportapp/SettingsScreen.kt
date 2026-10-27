@@ -25,10 +25,11 @@ fun SettingsContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
         modifier = modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text("Einstellungen", fontSize = 30.sp, fontWeight = FontWeight.Bold)
+        // Seitentitel: 28 sp, fett (einheitlich auf allen Seiten)
+        Text("Einstellungen", fontSize = 28.sp, fontWeight = FontWeight.Bold)
 
         // key() baut die Karte neu auf, damit der gelöschte Schlüssel nicht mehr angezeigt wird
         key(resetCount) {
@@ -46,7 +47,7 @@ fun SettingsContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
                     onClick = { showDialog = true },
                     modifier = Modifier.fillMaxWidth().height(56.dp)
                 ) {
-                    Text("Alle Daten löschen", fontSize = 18.sp)
+                    Text("Alle Daten löschen", fontSize = 16.sp)
                 }
                 if (message.isNotEmpty()) {
                     Text(message, fontSize = 16.sp)
