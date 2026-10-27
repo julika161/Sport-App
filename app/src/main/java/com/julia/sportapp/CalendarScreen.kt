@@ -49,7 +49,8 @@ fun CalendarContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text("Kalender", fontSize = 30.sp, fontWeight = FontWeight.Bold)
+        // Seitentitel: 28 sp, fett (einheitlich auf allen Seiten)
+        Text("Kalender", fontSize = 28.sp, fontWeight = FontWeight.Bold)
 
         // Monat wechseln
         Row(
@@ -58,11 +59,11 @@ fun CalendarContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
             modifier = Modifier.fillMaxWidth()
         ) {
             OutlinedButton(onClick = { month = month.minusMonths(1) }) {
-                Text("‹", fontSize = 20.sp)
+                Text("‹", fontSize = 16.sp)
             }
-            Text(monthTitle, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+            Text(monthTitle, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
             OutlinedButton(onClick = { month = month.plusMonths(1) }) {
-                Text("›", fontSize = 20.sp)
+                Text("›", fontSize = 16.sp)
             }
         }
 
@@ -73,6 +74,7 @@ fun CalendarContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
                     text = day,
                     modifier = Modifier.weight(1f),
                     textAlign = TextAlign.Center,
+                    fontSize = 16.sp,
                     fontWeight = FontWeight.SemiBold
                 )
             }
@@ -100,12 +102,12 @@ fun CalendarContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
             Spacer(Modifier.height(8.dp))
             Text(
                 "Einheiten am ${chosen.format(dateFormatter)}",
-                fontSize = 22.sp,
+                fontSize = 20.sp,
                 fontWeight = FontWeight.SemiBold
             )
             val dayEntries = byDate[chosen].orEmpty().sortedBy { it.time }
             if (dayEntries.isEmpty()) {
-                Text("Keine Einheit an diesem Tag.", fontSize = 18.sp)
+                Text("Keine Einheit an diesem Tag.", fontSize = 16.sp)
             } else {
                 dayEntries.forEach { ActivityRow(it) }
             }
@@ -153,7 +155,7 @@ fun RowScope.DayCell(
             )
             Text(
                 text = symbols,
-                fontSize = 12.sp,
+                fontSize = 14.sp,
                 maxLines = 1,
                 color = textColor
             )
