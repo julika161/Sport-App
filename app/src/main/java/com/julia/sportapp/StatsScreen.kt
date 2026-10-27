@@ -93,7 +93,8 @@ fun StatsContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text("Auswertung", fontSize = 30.sp, fontWeight = FontWeight.Bold)
+        // Seitentitel: 28 sp, fett (einheitlich auf allen Seiten)
+        Text("Auswertung", fontSize = 28.sp, fontWeight = FontWeight.Bold)
 
         // Umschalten: Monat oder Jahr
         Row(
@@ -123,28 +124,28 @@ fun StatsContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
             OutlinedButton(onClick = {
                 period = if (byMonth) period.minusMonths(1) else period.minusYears(1)
             }) {
-                Text("‹", fontSize = 20.sp)
+                Text("‹", fontSize = 16.sp)
             }
-            Text(title, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+            Text(title, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
             OutlinedButton(onClick = {
                 period = if (byMonth) period.plusMonths(1) else period.plusYears(1)
             }) {
-                Text("›", fontSize = 20.sp)
+                Text("›", fontSize = 16.sp)
             }
         }
 
         // Zusammenfassung
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text("Gesamt", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-                Text("${filtered.size} Einheiten", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                Text("Gesamt", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+                Text("${filtered.size} Einheiten", fontSize = 16.sp, fontWeight = FontWeight.Bold)
                 Text("${formatMinutes(totalMinutes)} Trainingszeit", fontSize = 16.sp)
                 Text("%.1f km Strecke".format(totalKm), fontSize = 16.sp)
             }
         }
 
         // Umschalten: Anzahl oder Kilometer/Minuten
-        Text("Anzeigen als", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+        Text("Anzeigen als", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.fillMaxWidth()
@@ -170,9 +171,9 @@ fun StatsContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
         }
 
         // Pro Sportart
-        Text("Nach Sportart", fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+        Text("Nach Sportart", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
         if (filtered.isEmpty()) {
-            Text("Keine Einheiten in diesem Zeitraum.", fontSize = 18.sp)
+            Text("Keine Einheiten in diesem Zeitraum.", fontSize = 16.sp)
         }
 
         stats.forEach { s ->
@@ -181,8 +182,8 @@ fun StatsContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("${s.type.symbol} ${s.type.label}", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-                    Text(statLabel(s, metric), fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Text("${s.type.symbol} ${s.type.label}", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    Text(statLabel(s, metric), fontSize = 16.sp, fontWeight = FontWeight.Bold)
                 }
                 Text(
                     "an ${s.days} ${if (s.days == 1) "Tag" else "Tagen"}",
@@ -204,11 +205,11 @@ fun StatsContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
 fun ChoiceButton(text: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier) {
     if (selected) {
         Button(onClick = onClick, modifier = modifier.height(52.dp)) {
-            Text(text, fontSize = 18.sp)
+            Text(text, fontSize = 16.sp)
         }
     } else {
         OutlinedButton(onClick = onClick, modifier = modifier.height(52.dp)) {
-            Text(text, fontSize = 18.sp)
+            Text(text, fontSize = 16.sp)
         }
     }
 }
