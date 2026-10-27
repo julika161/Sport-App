@@ -23,8 +23,8 @@ private const val GARMIN_API = "https://personal.connectapi.garmin.com"
 // Eine Zeile in einem Bereich, z. B. "Ruhepuls: 52 bpm"
 data class BodyRow(val label: String, val value: String)
 
-// Ein Bereich der Körper-Seite, z. B. "Schlaf"
-data class BodySection(val title: String, val rows: List<BodyRow>)
+// Ein Bereich der Gesundheit-Seite. error zeigt den Grund, wenn Garmin keine Daten liefert.
+data class BodySection(val title: String, val rows: List<BodyRow>, val error: String? = null)
 
 // Zugriffstoken aus dem Personal-API-Schlüssel holen
 private fun obtainToken(apiKey: String): String {
@@ -64,12 +64,17 @@ private fun garminGet(token: String, path: String): String {
     }
 }
 
-// Ein einzelner Bereich darf fehlen, ohne dass die ganze Seite ausfällt
-private fun <T> attempt(block: () -> T?): T? = try {
-    block()
-} catch (e: Exception) {
-    null
-}
+// Führt einen Abruf aus. Bei Fehler wird der Grund unter dem Schlüssel gemerkt, die Seite bleibt ganz.
+private fun <T> check(errors: MutableMap<String, String>, key: String, block: () -> T?): T? =
+    try {
+        block()
+    } catch (e: GarminException) {
+        errors[key] = e.message ?: "Garmin-Fehler"
+        null
+    } catch (e: Exception) {
+        errors[key] = "Antwort von Garmin nicht lesbar"
+        null
+    }
 
 private fun JSONObject.intOrNull(key: String): Int? =
     if (has(key) && !isNull(key)) optInt(key) else null
@@ -140,29 +145,30 @@ private fun parseSummary(text: String): JSONObject? {
     }
 }
 
-// Holt alle Körperdaten von heute von Garmin. Fehlende Bereiche bleiben leer.
+// Holt alle Gesundheitsdaten von heute von Garmin. Jeder Bereich ist einzeln abgesichert.
 fun fetchBody(apiKey: String): List<BodySection> {
     val token = obtainToken(apiKey)
     val today = LocalDate.now().toString()
+    val errors = mutableMapOf<String, String>()
 
-    val hrv = attempt { JSONObject(garminGet(token, "/hrv-service/hrv/$today")).optJSONObject("hrvSummary") }
-    val heart = attempt { JSONObject(garminGet(token, "/wellness-service/wellness/dailyHeartRate?date=$today")) }
-    val zones = attempt { parseZones(garminGet(token, "/biometric-service/heartRateZones/v2")) }
-    val stress = attempt {
+    val hrv = check(errors, "hrv") { JSONObject(garminGet(token, "/hrv-service/hrv/$today")).optJSONObject("hrvSummary") }
+    val heart = check(errors, "heart") { JSONObject(garminGet(token, "/wellness-service/wellness/dailyHeartRate?date=$today")) }
+    val zones = check(errors, "zones") { parseZones(garminGet(token, "/biometric-service/heartRateZones/v2")) }
+    val stress = check(errors, "stress") {
         val arr = JSONArray(garminGet(token, "/usersummary-service/stats/stress/daily/$today/$today"))
         (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }
             .firstOrNull { it.optString("calendarDate") == today } ?: arr.optJSONObject(0)
     }
-    val spo2 = attempt { JSONObject(garminGet(token, "/wellness-service/wellness/daily/spo2acclimation/$today")) }
-    val fitness = attempt { JSONObject(garminGet(token, "/fitnessage-service/fitnessage/v2/$today")) }
-    val sleep = attempt { JSONObject(garminGet(token, "/sleep-service/sleep/dailySleep?date=$today")) }
-    val battery = attempt {
+    val spo2 = check(errors, "spo2") { JSONObject(garminGet(token, "/wellness-service/wellness/daily/spo2acclimation/$today")) }
+    val fitness = check(errors, "fitness") { JSONObject(garminGet(token, "/fitnessage-service/fitnessage/v2/$today")) }
+    val sleep = check(errors, "sleep") { JSONObject(garminGet(token, "/sleep-service/sleep/dailySleep?date=$today")) }
+    val battery = check(errors, "battery") {
         JSONArray(garminGet(token, "/wellness-service/wellness/bodyBattery/reports/daily?startDate=$today&endDate=$today"))
     }
-    val summary = attempt {
+    val summary = check(errors, "summary") {
         parseSummary(garminGet(token, "/usersummary-service/v2/dailysummaries?startDate=$today&endDate=$today"))
     }
-    val cycle = attempt {
+    val cycle = check(errors, "cycle") {
         JSONObject(garminGet(token, "/periodichealth-service/menstrualcycle/dayview/$today?todayDate=$today"))
     }
 
@@ -171,7 +177,7 @@ fun fetchBody(apiKey: String): List<BodySection> {
     val sleepMinutes = sleepDto?.intOrNull("sleepTimeSeconds")?.let { it / 60 }
     val sleepScore = sleepDto?.optJSONObject("sleepScores")?.optJSONObject("overall")?.intOrNull("value")
     val batteryNow = battery?.let { latestBodyBattery(it) }
-    val todayReport = battery?.let { it.optJSONObject(it.length() - 1) }
+    val todayReport = battery?.let { if (it.length() > 0) it.optJSONObject(it.length() - 1) else null }
     val intensity = summary?.let { s ->
         val moderate = s.intOrNull("moderateIntensityMinutes")
         val vigorous = s.intOrNull("vigorousIntensityMinutes")
@@ -179,50 +185,60 @@ fun fetchBody(apiKey: String): List<BodySection> {
     }
     val phase = cycle?.firstText("currentPhaseType", "phaseType", "currentPhaseName")
 
-    val sections = listOf(
+    // Grund anzeigen, falls der Bereich leer ist
+    fun errorFor(vararg keys: String): String? = keys.firstNotNullOfOrNull { errors[it] }
+
+    return listOf(
         BodySection(
             "Herzfrequenzvariabilität (HRV)",
             listOfNotNull(
                 hrv?.intOrNull("lastNightAvg")?.let { BodyRow("Letzte Nacht", "$it ms") },
                 hrvStatus?.let { BodyRow("Status", hrvStatusText(it)) }
-            )
+            ),
+            errorFor("hrv")
         ),
         BodySection(
             "Ruhepuls",
-            listOfNotNull(heart?.intOrNull("restingHeartRate")?.let { BodyRow("Ruhepuls", "$it bpm") })
+            listOfNotNull(heart?.intOrNull("restingHeartRate")?.let { BodyRow("Ruhepuls", "$it bpm") }),
+            errorFor("heart")
         ),
         BodySection(
             "Herzfrequenz",
             listOfNotNull(
                 heart?.intOrNull("minHeartRate")?.let { BodyRow("Tiefster Wert", "$it bpm") },
                 heart?.intOrNull("maxHeartRate")?.let { BodyRow("Höchster Wert", "$it bpm") }
-            )
+            ),
+            errorFor("heart")
         ),
-        BodySection("Herzfrequenzzonen", zones ?: emptyList()),
+        BodySection("Herzfrequenzzonen", zones ?: emptyList(), errorFor("zones")),
         BodySection(
             "Stresslevel",
-            listOfNotNull(stress?.intOrNull("overallStressLevel")?.let { BodyRow("Tagesdurchschnitt (0 bis 100)", "$it") })
+            listOfNotNull(stress?.intOrNull("overallStressLevel")?.let { BodyRow("Tagesdurchschnitt (0 bis 100)", "$it") }),
+            errorFor("stress")
         ),
         BodySection(
-            "Atmung (Sauerstoff, SpO2)",
+            "Atmung (SpO2)",
             listOfNotNull(
                 spo2?.intOrNull("averageSpO2")?.let { BodyRow("Durchschnitt", "$it %") },
                 spo2?.intOrNull("lowestSpO2")?.let { BodyRow("Tiefster Wert", "$it %") }
-            )
+            ),
+            errorFor("spo2")
         ),
         BodySection(
             "Fitnessalter",
             listOfNotNull(
                 fitness?.firstInt("fitnessAge")?.let { BodyRow("Fitnessalter", "$it Jahre") },
                 fitness?.firstInt("chronologicalAge")?.let { BodyRow("Kalenderalter", "$it Jahre") }
-            )
+            ),
+            errorFor("fitness")
         ),
         BodySection(
             "Schlaf",
             listOfNotNull(
                 sleepMinutes?.let { BodyRow("Schlafdauer", "%d h %02d min".format(it / 60, it % 60)) },
                 sleepScore?.let { BodyRow("Schlafwert", "$it") }
-            )
+            ),
+            errorFor("sleep")
         ),
         BodySection(
             "Body Battery",
@@ -230,7 +246,8 @@ fun fetchBody(apiKey: String): List<BodySection> {
                 batteryNow?.let { BodyRow("Aktuell", "$it von 100") },
                 todayReport?.intOrNull("charged")?.let { BodyRow("Aufgeladen", "+$it") },
                 todayReport?.intOrNull("drained")?.let { BodyRow("Verbraucht", "-$it") }
-            )
+            ),
+            errorFor("battery")
         ),
         BodySection(
             "Tageszusammenfassung",
@@ -238,21 +255,18 @@ fun fetchBody(apiKey: String): List<BodySection> {
                 summary?.intOrNull("totalSteps")?.let { BodyRow("Schritte", "$it") },
                 summary?.intOrNull("totalKilocalories")?.let { BodyRow("Kalorien", "$it kcal") },
                 intensity?.let { BodyRow("Intensitätsminuten", "$it Min.") }
-            )
+            ),
+            errorFor("summary")
         ),
         BodySection(
             "Zyklus",
-            listOfNotNull(phase?.let { BodyRow("Phase", phaseText(it)) })
+            listOfNotNull(phase?.let { BodyRow("Phase", phaseText(it)) }),
+            errorFor("cycle")
         )
     )
-
-    if (sections.all { it.rows.isEmpty() }) {
-        throw GarminException("Garmin hat heute keine Körperdaten geliefert. Ist die Uhr synchronisiert?")
-    }
-    return sections
 }
 
-// Körper-Seite: alle Körperdaten von heute, ein Bereich pro Karte
+// Gesundheit-Seite: alle Werte von heute, ein Bereich pro Karte
 @Composable
 fun BodyContent(modifier: Modifier = Modifier) {
     val context = LocalContext.current
@@ -282,7 +296,7 @@ fun BodyContent(modifier: Modifier = Modifier) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text("Körper", fontSize = 28.sp, fontWeight = FontWeight.Bold)
+        Text("Gesundheit", fontSize = 28.sp, fontWeight = FontWeight.Bold)
         Text("Heute · ${LocalDate.now().format(dateFormatter)}", fontSize = 16.sp)
 
         OutlinedButton(
@@ -290,7 +304,7 @@ fun BodyContent(modifier: Modifier = Modifier) {
             enabled = !loading,
             modifier = Modifier.fillMaxWidth().height(52.dp)
         ) {
-            Text(if (loading) "Lade Garmin-Daten ..." else "Aktualisieren", fontSize = 18.sp)
+            Text(if (loading) "Lade Garmin-Daten ..." else "Aktualisieren", fontSize = 16.sp)
         }
 
         if (loading) {
@@ -306,14 +320,18 @@ fun BodyContent(modifier: Modifier = Modifier) {
     }
 }
 
-// Eine Karte pro Bereich: Titel, Zeilen oder ein Hinweis, wenn keine Daten da sind
+// Eine Karte pro Bereich: Titel, Werte oder der Grund, warum keine Werte da sind
 @Composable
 private fun BodySectionCard(section: BodySection) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(section.title, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
             if (section.rows.isEmpty()) {
-                Text("Keine Daten von Garmin", fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    "Keine Daten von Garmin" + (section.error?.let { " · $it" } ?: ""),
+                    fontSize = 14.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
             section.rows.forEach { row ->
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
