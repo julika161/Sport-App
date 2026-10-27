@@ -32,7 +32,7 @@ class ActivityDatabase(context: Context) : SQLiteOpenHelper(context, "sportapp.d
         }
     }
 
-    // Eine neue Einheit speichern
+    // Eine Einheit speichern (wird nur vom Garmin-Import genutzt)
     fun insert(activity: Activity) {
         val values = ContentValues().apply {
             put("type", activity.type.name)
@@ -66,5 +66,10 @@ class ActivityDatabase(context: Context) : SQLiteOpenHelper(context, "sportapp.d
             }
         }
         return result
+    }
+
+    // Alle Einheiten löschen
+    fun deleteAll() {
+        writableDatabase.delete("activities", null, null)
     }
 }
