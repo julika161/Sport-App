@@ -33,7 +33,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// Die Bereiche der App (unten in der Leiste)
+// Die Bereiche der App (unten in der Leiste, nur als Symbol)
 enum class Screen(val label: String, val symbol: String) {
     Start("Start", "🏠"),
     Koerper("Gesundheit", "🫀"),
@@ -55,8 +55,7 @@ fun SportAppScreen() {
                     NavigationBarItem(
                         selected = current == screen,
                         onClick = { current = screen },
-                        icon = { Text(screen.symbol, fontSize = 22.sp) },
-                        label = { Text(screen.label) }
+                        icon = { Text(screen.symbol, fontSize = 24.sp) }
                     )
                 }
             }
