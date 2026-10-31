@@ -17,6 +17,7 @@ import com.julia.sportapp.data.ActivityType
 import com.julia.sportapp.data.RunDetail
 import com.julia.sportapp.data.RunLap
 import java.util.Locale
+import kotlin.math.roundToInt
 
 // Liste und antippbare Detailseite vergangener Läufe.
 @Composable
@@ -74,9 +75,7 @@ private fun RunListContent(
 
 @Composable
 private fun RunListCard(run: Activity, detail: RunDetail?, onClick: () -> Unit) {
-    Card(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)
-    ) {
+    Card(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -97,11 +96,11 @@ private fun RunListCard(run: Activity, detail: RunDetail?, onClick: () -> Unit) 
                 }
                 Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(
-                        detail?.averagePaceSecondsPerKm?.let { formatRunPace(it) } ?: "Tempo n/a",
+                        paceSecondsPerKm(run, detail)?.let { formatRunPace(it) } ?: "Tempo n/a",
                         fontSize = 17.sp,
                         fontWeight = FontWeight.SemiBold
                     )
-                    Text("Ø-Tempo", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Ø-Tempo /km", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             Text("Tippen für Laufdetails  ›", fontSize = 14.sp, color = MaterialTheme.colorScheme.primary)
@@ -116,6 +115,10 @@ private fun RunDetailContent(
     onBack: () -> Unit,
     modifier: Modifier
 ) {
+    val pace = paceSecondsPerKm(activity, detail)
+    val speed = detail?.averageSpeedKmh ?: summarySpeedKmh(activity)
+    val exactDuration = detail?.durationSeconds ?: activity.durationSeconds
+
     Column(
         modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -130,16 +133,23 @@ private fun RunDetailContent(
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Übersicht", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
                 RunMetricRow("Distanz", activity.distanceKm?.let { "%.2f km".format(Locale.GERMAN, it) })
-                RunMetricRow("Dauer", detail?.durationSeconds?.let { formatRunDuration(it) } ?: "${activity.durationMinutes} Min.")
-                RunMetricRow("Ø-Tempo", detail?.averagePaceSecondsPerKm?.let { "${formatRunPace(it)} min/km" })
-                RunMetricRow("Geschwindigkeit", detail?.averageSpeedKmh?.let { "%.1f km/h".format(Locale.GERMAN, it) })
+                RunMetricRow("Dauer", exactDuration?.let { formatRunDuration(it) } ?: "${activity.durationMinutes} Min.")
+                RunMetricRow("Ø-Tempo", pace?.let { "${formatRunPace(it)} min/km" })
+                RunMetricRow("Geschwindigkeit", speed?.let { "%.1f km/h".format(Locale.GERMAN, it) })
+                if (detail == null && pace != null) {
+                    Text(
+                        "Die Pace ist aus Garmin-Distanz und Aktivitätsdauer berechnet. FIT-Zusatzwerte werden nach der Garmin-Synchronisierung ergänzt.",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
 
         if (detail == null) {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Text(
-                    "Für diesen Lauf sind noch keine Garmin-FIT-Details gespeichert. Öffne Einstellungen und synchronisiere Garmin erneut.",
+                    "Für diesen Lauf sind noch keine Garmin-FIT-Zusatzdetails gespeichert. Synchronisiere Garmin unter Einstellungen erneut; dort zeigt der Status jetzt auch den Grund, falls ein Download scheitert.",
                     modifier = Modifier.padding(16.dp),
                     fontSize = 15.sp
                 )
@@ -199,6 +209,21 @@ private fun RunLapRow(lap: RunLap) {
         if (details.isNotEmpty()) Text(details.joinToString(" · "), fontSize = 14.sp)
         HorizontalDivider()
     }
+}
+
+private fun paceSecondsPerKm(activity: Activity, detail: RunDetail?): Int? {
+    detail?.averagePaceSecondsPerKm?.let { return it }
+    val distanceKm = activity.distanceKm?.takeIf { it > 0.0 } ?: return null
+    val durationSeconds = activity.durationSeconds ?: activity.durationMinutes * 60
+    if (durationSeconds <= 0) return null
+    return (durationSeconds / distanceKm).roundToInt()
+}
+
+private fun summarySpeedKmh(activity: Activity): Double? {
+    val distanceKm = activity.distanceKm?.takeIf { it > 0.0 } ?: return null
+    val durationSeconds = activity.durationSeconds ?: activity.durationMinutes * 60
+    if (durationSeconds <= 0) return null
+    return distanceKm * 3600.0 / durationSeconds
 }
 
 private fun formatRunPace(secondsPerKm: Int): String {
