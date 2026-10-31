@@ -11,7 +11,7 @@ import java.time.LocalDate
 import java.time.LocalTime
 
 // Speichert Trainings und ausgewählte Laufwerte dauerhaft und nur lokal auf dem Handy.
-class ActivityDatabase(context: Context) : SQLiteOpenHelper(context, "sportapp.db", null, 3) {
+class ActivityDatabase(context: Context) : SQLiteOpenHelper(context, "sportapp.db", null, 4) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -22,19 +22,23 @@ class ActivityDatabase(context: Context) : SQLiteOpenHelper(context, "sportapp.d
                 time TEXT NOT NULL,
                 durationMinutes INTEGER NOT NULL,
                 distanceKm REAL,
-                garminId TEXT
+                garminId TEXT,
+                durationSeconds INTEGER
             )"""
         )
         createRunDetailsTable(db)
     }
 
-    // Bestehende Trainings bleiben bei einer App-Aktualisierung erhalten.
+    // Bestehende Trainings bleiben bei App-Aktualisierungen erhalten.
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) {
             db.execSQL("ALTER TABLE activities ADD COLUMN garminId TEXT")
         }
         if (oldVersion < 3) {
             createRunDetailsTable(db)
+        }
+        if (oldVersion < 4) {
+            db.execSQL("ALTER TABLE activities ADD COLUMN durationSeconds INTEGER")
         }
     }
 
@@ -55,21 +59,31 @@ class ActivityDatabase(context: Context) : SQLiteOpenHelper(context, "sportapp.d
     }
 
     fun insert(activity: Activity) {
-        val values = ContentValues().apply {
-            put("type", activity.type.name)
-            put("date", activity.date.toString())
-            put("time", activity.time.toString())
-            put("durationMinutes", activity.durationMinutes)
-            put("distanceKm", activity.distanceKm)
-            put("garminId", activity.garminId)
-        }
-        writableDatabase.insert("activities", null, values)
+        writableDatabase.insert("activities", null, activityValues(activity))
+    }
+
+    // Bei erneuter Garmin-Synchronisierung werden vorhandene Garmin-Einträge mit exakten Sekunden ergänzt.
+    fun updateImportedActivity(activity: Activity) {
+        val garminId = activity.garminId ?: return
+        writableDatabase.update(
+            "activities", activityValues(activity), "garminId = ?", arrayOf(garminId)
+        )
+    }
+
+    private fun activityValues(activity: Activity) = ContentValues().apply {
+        put("type", activity.type.name)
+        put("date", activity.date.toString())
+        put("time", activity.time.toString())
+        put("durationMinutes", activity.durationMinutes)
+        put("distanceKm", activity.distanceKm)
+        put("garminId", activity.garminId)
+        put("durationSeconds", activity.durationSeconds)
     }
 
     fun getAll(): List<Activity> {
         val result = mutableListOf<Activity>()
         readableDatabase.rawQuery(
-            "SELECT type, date, time, durationMinutes, distanceKm, garminId FROM activities ORDER BY date DESC, time DESC",
+            "SELECT type, date, time, durationMinutes, distanceKm, garminId, durationSeconds FROM activities ORDER BY date DESC, time DESC",
             null
         ).use { cursor ->
             while (cursor.moveToNext()) {
@@ -80,7 +94,8 @@ class ActivityDatabase(context: Context) : SQLiteOpenHelper(context, "sportapp.d
                         time = LocalTime.parse(cursor.getString(2)),
                         durationMinutes = cursor.getInt(3),
                         distanceKm = if (cursor.isNull(4)) null else cursor.getDouble(4),
-                        garminId = if (cursor.isNull(5)) null else cursor.getString(5)
+                        garminId = if (cursor.isNull(5)) null else cursor.getString(5),
+                        durationSeconds = if (cursor.isNull(6)) null else cursor.getInt(6)
                     )
                 )
             }
