@@ -29,6 +29,7 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.time.LocalDate
+import java.util.Locale
 import kotlin.math.roundToInt
 
 private const val GARMIN_API = "https://personal.connectapi.garmin.com"
@@ -51,10 +52,11 @@ private data class GarminHealthSnapshot(
     val lowestSpO2: Int?,
     val fitnessAge: Int?,
     val chronologicalAge: Int?,
+    val vo2Max: Double?,
     val errors: Map<String, String>
 )
 
-// Holt tägliche Werte direkt von Garmin. Die Antworten bleiben im Arbeitsspeicher.
+// Holt tägliche Werte direkt von Garmin. Antworten und Messwerte bleiben lokal im Arbeitsspeicher.
 private fun fetchBody(apiKey: String): GarminHealthSnapshot {
     val token = obtainToken(apiKey)
     val today = LocalDate.now().toString()
@@ -84,6 +86,10 @@ private fun fetchBody(apiKey: String): GarminHealthSnapshot {
     val fitness = safeFetchObject(errors, "Fitnessalter") {
         JSONObject(garminGet(token, "/fitnessage-service/fitnessage/v2/$today"))
     }
+    val vo2StartDate = LocalDate.now().minusDays(180).toString()
+    val vo2Data = safeFetchJson(errors, "VO₂max") {
+        parseHealthJson(garminGet(token, "/metrics-service/metrics/maxmet/daily/$vo2StartDate/$today"))
+    }
 
     val sleepObject = sleep?.let { findSleepPayload(it) }
     val overallScore = sleepObject?.optJSONObject("sleepScores")?.optJSONObject("overall")
@@ -112,6 +118,7 @@ private fun fetchBody(apiKey: String): GarminHealthSnapshot {
         lowestSpO2 = spo2?.firstInt("lowestSpO2"),
         fitnessAge = fitness?.firstInt("fitnessAge"),
         chronologicalAge = fitness?.firstInt("chronologicalAge"),
+        vo2Max = vo2Data?.let { findLatestVo2Max(it) },
         errors = errors.toMap()
     )
 }
@@ -210,15 +217,74 @@ private fun findIntRec(value: Any?, vararg keys: String): Int? {
     }
 }
 
-private fun lastBodyBatteryValue(reports: JSONArray): Int? {
-    for (reportIndex in reports.length() - 1 downTo 0) {
-        val values = reports.optJSONObject(reportIndex)?.optJSONArray("bodyBatteryValuesArray") ?: continue
-        for (valueIndex in values.length() - 1 downTo 0) {
-            val point = values.optJSONArray(valueIndex) ?: continue
-            if (point.length() >= 3 && !point.isNull(2)) return point.optInt(2)
+// Garmin liefert VO₂max je nach Antwortform in unterschiedlichen verschachtelten Feldern.
+private fun findLatestVo2Max(value: Any?): Double? {
+    when (value) {
+        is JSONArray -> {
+            for (index in value.length() - 1 downTo 0) {
+                val found = findLatestVo2Max(value.opt(index))
+                if (found != null) return found
+            }
+        }
+        is JSONObject -> {
+            value.firstDouble("vo2MaxValue", "vo2Max", "vo2MaxPreciseValue", "vo2max")?.let { return it }
+            val names = mutableListOf<String>()
+            val iterator = value.keys()
+            while (iterator.hasNext()) names.add(iterator.next())
+            for (name in names.asReversed()) {
+                val found = findLatestVo2Max(value.opt(name))
+                if (found != null) return found
+            }
         }
     }
     return null
+}
+
+private fun JSONObject.firstDouble(vararg keys: String): Double? =
+    keys.firstNotNullOfOrNull { key ->
+        if (has(key) && !isNull(key)) {
+            optDouble(key, Double.NaN).takeIf { it.isFinite() && it in 1.0..100.0 }
+        } else null
+    }
+
+// Unterstützt Garmin-Body-Battery-Punkte als Objekt oder als unterschiedlich lange Zahlenreihe.
+private fun lastBodyBatteryValue(reports: JSONArray): Int? {
+    for (reportIndex in reports.length() - 1 downTo 0) {
+        val report = reports.optJSONObject(reportIndex) ?: continue
+        val directValue = findIntRec(
+            report,
+            "currentBodyBattery", "currentBodyBatteryValue", "bodyBatteryLevel", "bodyBatteryValue", "bodyBattery"
+        )?.takeIf { it in 0..100 }
+        if (directValue != null) return directValue
+
+        val values = report.optJSONArray("bodyBatteryValuesArray") ?: continue
+        for (valueIndex in values.length() - 1 downTo 0) {
+            val point = values.opt(valueIndex)
+            val level = when (point) {
+                is JSONObject -> point.firstInt("value", "bodyBatteryValue", "bodyBatteryLevel", "bodyBattery")
+                    ?.takeIf { it in 0..100 }
+                is JSONArray -> {
+                    val third = point.intAt(2)?.takeIf { it in 0..100 }
+                    val second = point.intAt(1)?.takeIf { it in 0..100 }
+                    when {
+                        third != null && third > 1 -> third
+                        second != null -> second
+                        third != null -> third
+                        else -> null
+                    }
+                }
+                else -> null
+            }
+            if (level != null) return level
+        }
+    }
+    return null
+}
+
+private fun JSONArray.intAt(index: Int): Int? {
+    if (index !in 0 until length() || isNull(index)) return null
+    val number = optDouble(index, Double.NaN)
+    return number.takeIf { it.isFinite() }?.roundToInt()
 }
 
 private fun translateHrvStatus(raw: String): String = when (raw.uppercase()) {
@@ -325,12 +391,18 @@ fun BodyContent(modifier: Modifier = Modifier) {
                 )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                val batteryInfo = listOfNotNull(
+                val batteryChanges = listOfNotNull(
                     data.batteryCharged?.let { "+$it geladen" },
                     data.batteryDrained?.let { "−$it verbraucht" }
-                ).joinToString(" · ").ifBlank { "von 100" }
+                ).joinToString(" · ")
+                val batteryDetail = when {
+                    data.bodyBattery != null && batteryChanges.isNotBlank() -> "Stand jetzt · $batteryChanges"
+                    data.bodyBattery != null -> "Aktueller Stand"
+                    batteryChanges.isNotBlank() -> "$batteryChanges · aktueller Stand fehlt"
+                    else -> "Kein aktueller Stand geliefert"
+                }
                 HealthMetricTile(
-                    "Body Battery", data.bodyBattery?.let { "$it/100" } ?: "—", batteryInfo,
+                    "Body Battery", data.bodyBattery?.let { "$it/100" } ?: "—", batteryDetail,
                     Icons.Filled.BatteryChargingFull, Modifier.weight(1f)
                 )
                 HealthMetricTile(
@@ -352,34 +424,31 @@ fun BodyContent(modifier: Modifier = Modifier) {
             }
 
             Text("Weitere Tageswerte", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-            val hasOtherValues = data.stressAverage != null || data.steps != null ||
-                (data.minHeartRate != null && data.maxHeartRate != null) || data.averageSpO2 != null ||
-                data.lowestSpO2 != null || data.fitnessAge != null || data.chronologicalAge != null
-            if (hasOtherValues || data.errors.isNotEmpty()) {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                        HealthValueRow("Stress · Garmin-Tageswert", data.stressAverage?.let { "$it/100" })
-                        HealthValueRow("Schritte", data.steps?.toString())
-                        HealthValueRow(
-                            "Tagespuls min.–max.",
-                            if (data.minHeartRate != null && data.maxHeartRate != null) "${data.minHeartRate}–${data.maxHeartRate} bpm" else null
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    HealthValueRow(
+                        "VO₂max",
+                        data.vo2Max?.let { String.format(Locale.GERMAN, "%.1f ml/kg/min", it) } ?: "Nicht verfügbar"
+                    )
+                    HealthValueRow("Stress · Garmin-Tageswert", data.stressAverage?.let { "$it/100" })
+                    HealthValueRow("Schritte", data.steps?.toString())
+                    HealthValueRow(
+                        "Tagespuls min.–max.",
+                        if (data.minHeartRate != null && data.maxHeartRate != null) "${data.minHeartRate}–${data.maxHeartRate} bpm" else null
+                    )
+                    HealthValueRow("SpO₂ · Durchschnitt", data.averageSpO2?.let { "$it %" })
+                    HealthValueRow("SpO₂ · niedrigster Wert", data.lowestSpO2?.let { "$it %" })
+                    HealthValueRow("Fitnessalter", data.fitnessAge?.let { "$it Jahre" })
+                    HealthValueRow("Kalenderalter", data.chronologicalAge?.let { "$it Jahre" })
+                    if (data.errors.isNotEmpty()) {
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                        Text(
+                            "Nicht verfügbar: ${data.errors.keys.joinToString(", ")}",
+                            fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(vertical = 8.dp)
                         )
-                        HealthValueRow("SpO₂ · Durchschnitt", data.averageSpO2?.let { "$it %" })
-                        HealthValueRow("SpO₂ · niedrigster Wert", data.lowestSpO2?.let { "$it %" })
-                        HealthValueRow("Fitnessalter", data.fitnessAge?.let { "$it Jahre" })
-                        HealthValueRow("Kalenderalter", data.chronologicalAge?.let { "$it Jahre" })
-                        if (data.errors.isNotEmpty()) {
-                            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                            Text(
-                                "Nicht verfügbar: ${data.errors.keys.joinToString(", ")}",
-                                fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(vertical = 8.dp)
-                            )
-                        }
                     }
                 }
-            } else {
-                Text("Heute sind keine weiteren Garmin-Tageswerte verfügbar.", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Text(
                 "Garmin-Messwerte sind Orientierung, keine medizinische Diagnose. Die App sendet sie nicht an andere Dienste.",
