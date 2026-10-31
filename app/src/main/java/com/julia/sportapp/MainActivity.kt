@@ -17,7 +17,7 @@ import com.julia.sportapp.data.ActivityDatabase
 import com.julia.sportapp.ui.theme.SportAppTheme
 import java.time.format.DateTimeFormatter
 
-// Datums- und Zeitformate für die Anzeige (deutsch)
+// Datums- und Zeitformate für die Anzeige (deutsch).
 val dateFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("dd.MM.yyyy")
 val timeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
 
@@ -33,10 +33,11 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// Die Bereiche der App (unten in der Leiste, nur als Symbol)
+// Die Bereiche der App (unten in der Leiste, nur als Symbol).
 enum class Screen(val label: String, val symbol: String) {
     Start("Ziele", "🎯"),
     Laufcoach("Laufcoach", "🏃"),
+    Laeufe("Läufe", "👟"),
     Koerper("Gesundheit", "🫀"),
     Kalender("Kalender", "📅"),
     Auswertung("Auswertung", "📊"),
@@ -56,7 +57,8 @@ fun SportAppScreen() {
                     NavigationBarItem(
                         selected = current == screen,
                         onClick = { current = screen },
-                        icon = { Text(screen.symbol, fontSize = 24.sp) }
+                        icon = { Text(screen.symbol, fontSize = 24.sp) },
+                        label = { Text(screen.label, fontSize = 10.sp) }
                     )
                 }
             }
@@ -65,6 +67,7 @@ fun SportAppScreen() {
         when (current) {
             Screen.Start -> StartContent(db, Modifier.padding(innerPadding))
             Screen.Laufcoach -> RunningCoachContent(db, Modifier.padding(innerPadding))
+            Screen.Laeufe -> RunHistoryContent(db, Modifier.padding(innerPadding))
             Screen.Koerper -> BodyContent(Modifier.padding(innerPadding))
             Screen.Kalender -> CalendarContent(db, Modifier.padding(innerPadding))
             Screen.Auswertung -> StatsContent(db, Modifier.padding(innerPadding))
@@ -73,14 +76,14 @@ fun SportAppScreen() {
     }
 }
 
-// Ziele-Startseite
+// Ziele-Startseite.
 @Composable
 fun StartContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
     val entries = remember { db.getAll() }
     WeeklyGoalContent(entries, modifier)
 }
 
-// Eine Zeile in einer Liste von Einheiten (z. B. im Kalender)
+// Eine Zeile in einer Liste von Einheiten (z. B. im Kalender).
 @Composable
 fun ActivityRow(a: Activity) {
     val km = a.distanceKm?.let { " · %.1f km".format(it) } ?: ""
