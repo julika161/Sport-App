@@ -16,6 +16,7 @@ import com.julia.sportapp.data.ActivityDatabase
 import com.julia.sportapp.data.ActivityType
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.time.LocalDate
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -44,15 +45,25 @@ fun RunningCoachContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
     var zonesMessage by remember { mutableStateOf("") }
 
     val recentRuns = remember(db) { db.getAll().filter { it.type == ActivityType.LAUFEN } }
-    val coachSessions = remember(recentRuns, selectedDays) { buildCoachSessions(recentRuns, selectedDays) }
+    val parsedTargetDate = parseCoachTargetDate(targetDate)
+    val targetDateIssue = when {
+        targetDate.isBlank() -> null
+        parsedTargetDate == null -> "Bitte das Wunschdatum als TT.MM.JJJJ eingeben."
+        parsedTargetDate.isBefore(LocalDate.now()) -> "Der Zieltermin liegt vor heute. Bitte ein zukünftiges Datum wählen."
+        else -> null
+    }
+    val heartRateTarget = coachZoneTwoTarget(heartRateZones)
+    val coachSessions = remember(recentRuns, selectedDays, parsedTargetDate, heartRateTarget) {
+        buildCoachSessions(recentRuns, selectedDays, parsedTargetDate, heartRateTarget)
+    }
     val distanceKm = distanceText.replace(',', '.').toDoubleOrNull()
     val targetMinutes = timeText.replace(',', '.').toDoubleOrNull()
     val validGoal = distanceKm != null && distanceKm > 0.0 && targetMinutes != null && targetMinutes > 0.0
     val pace = if (validGoal) targetMinutes!! / distanceKm!! else null
     val speed = if (validGoal) distanceKm!! / (targetMinutes!! / 60.0) else null
 
-    LaunchedEffect(apiKey, goalSaved, validGoal) {
-        if (!goalSaved || !validGoal) return@LaunchedEffect
+    LaunchedEffect(apiKey, goalSaved, validGoal, targetDateIssue) {
+        if (!goalSaved || !validGoal || targetDateIssue != null) return@LaunchedEffect
         if (apiKey.isBlank()) {
             heartRateZones = emptyList()
             zonesMessage = "Garmin nicht verbunden. Verbinde Garmin unter Einstellungen, um deine persönlichen Laufzonen zu laden."
@@ -77,6 +88,13 @@ fun RunningCoachContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
                     }
                 }
             )
+        }
+    }
+
+    // Sobald Zone 2 geladen ist, wird auch das Pulsziel im lokalen Kalenderplan aktualisiert.
+    LaunchedEffect(goalSaved, validGoal, targetDateIssue, coachSessions) {
+        if (goalSaved && validGoal && targetDateIssue == null) {
+            saveCoachSchedule(context, coachSessions)
         }
     }
 
@@ -133,6 +151,9 @@ fun RunningCoachContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
+                if (targetDateIssue != null) {
+                    Text(targetDateIssue, fontSize = 13.sp, color = MaterialTheme.colorScheme.error)
+                }
             }
         }
 
@@ -183,20 +204,21 @@ fun RunningCoachContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
                 saveCoachSchedule(context, coachSessions)
                 goalSaved = true
                 val scheduledCount = coachSessions.count { it.date != null }
-                savedMessage = if (scheduledCount > 0) {
-                    "Ziel gespeichert · $scheduledCount Coach-Einheiten im Kalender eingeplant."
-                } else {
-                    "Ziel gespeichert · Wähle mögliche Lauftage, um Coach-Einheiten im Kalender einzuplanen."
+                savedMessage = when {
+                    selectedDays.isEmpty() -> "Ziel gespeichert · Wähle mögliche Lauftage für deinen Kalenderplan."
+                    scheduledCount == 0 -> "Vor dem Zieltermin liegen keine ausgewählten Trainingstage mehr."
+                    targetDate.isNotBlank() -> "Ziel gespeichert · $scheduledCount Coach-Termine bis $targetDate eingeplant."
+                    else -> "Ziel gespeichert · $scheduledCount Coach-Termine für die nächsten vier Wochen eingeplant."
                 }
             },
-            enabled = validGoal,
+            enabled = validGoal && targetDateIssue == null,
             modifier = Modifier.fillMaxWidth().height(54.dp)
         ) {
             Text("Ziel speichern", fontSize = 16.sp)
         }
         if (savedMessage.isNotEmpty()) Text(savedMessage, fontSize = 14.sp)
 
-        if (goalSaved && validGoal && pace != null) {
+        if (goalSaved && validGoal && targetDateIssue == null && pace != null) {
             RunningRecommendations(
                 goalDistanceKm = distanceKm!!,
                 goalPaceMinutesPerKm = pace,
