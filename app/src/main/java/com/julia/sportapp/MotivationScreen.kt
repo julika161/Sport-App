@@ -37,11 +37,10 @@ private enum class Goal(val label: String, val symbol: String, val color: Color,
     LAUFEN("Laufen (1× Woche)", "🏃", Color(0xFF43A047), true)
 }
 
+private enum class GoalPeriod { WEEK, YEAR }
+
 // Yoga vor 12 Uhr zählt als morgens, ab 12 Uhr als abends
 private val NOON: LocalTime = LocalTime.of(12, 0)
-
-// Wochenziel "1× pro Woche" ergibt im Jahr 52 Mal
-private const val WEEKS_TARGET = 52
 
 // Schritte für ein Jahr werden in Stücken von 28 Tagen geholt
 private const val CHUNK_DAYS = 28L
@@ -65,7 +64,7 @@ private fun achieved(goal: Goal, day: LocalDate, activities: List<Activity>, val
     }
 
 // Ergebnis eines Ziels für ein Jahr
-private data class YearStat(val goal: Goal, val done: Int, val target: Int, val elapsed: Int)
+private data class YearStat(val goal: Goal, val done: Int, val elapsed: Int)
 
 // Alle Tage eines Jahres
 private fun weekDaysOfYear(year: Int): List<LocalDate> {
@@ -73,7 +72,7 @@ private fun weekDaysOfYear(year: Int): List<LocalDate> {
     return (0 until Year.of(year).length()).map { first.plusDays(it.toLong()) }
 }
 
-// Jahresauswertung: wie oft ein Ziel bisher erreicht wurde (nur vergangene Tage bzw. Wochen)
+// Jahresauswertung: Erfolg bisher geteilt durch vergangene Tage oder Wochen
 private fun yearStat(
     goal: Goal,
     year: Int,
@@ -88,11 +87,11 @@ private fun yearStat(
         val done = mondays.count { monday ->
             (0..6).any { achieved(goal, monday.plusDays(it.toLong()), activities, values) == true }
         }
-        YearStat(goal, done, WEEKS_TARGET, mondays.count { !it.isAfter(today) })
+        YearStat(goal, done, mondays.count { !it.isAfter(today) })
     } else {
         val past = allDays.filter { !it.isAfter(today) }
         val done = past.count { achieved(goal, it, activities, values) == true }
-        YearStat(goal, done, Year.of(year).length(), past.size)
+        YearStat(goal, done, past.size)
     }
 }
 
@@ -109,13 +108,16 @@ private fun fetchYearSteps(apiKey: String, start: LocalDate, end: LocalDate): Ma
     return result
 }
 
-// Startseite: Wochenziel mit Navigation zu vergangenen Wochen (vorwärts bis zur aktuellen Woche)
+// Ziele-Seite: zuerst die Wochenansicht, per Umschalter zur Jahresübersicht
 @Composable
 fun WeeklyGoalContent(activities: List<Activity>, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val apiKey = remember { loadApiKey(context) }
     val today = LocalDate.now()
     val thisMonday = today.with(DayOfWeek.MONDAY)
+
+    // Beim Öffnen immer mit der Wochenansicht starten
+    var period by remember { mutableStateOf(GoalPeriod.WEEK) }
 
     // 0 = aktuelle Woche, -1 = letzte Woche, usw.
     var weekOffset by remember { mutableStateOf(0) }
@@ -127,39 +129,50 @@ fun WeeklyGoalContent(activities: List<Activity>, modifier: Modifier = Modifier)
     var values by remember { mutableStateOf(WeekValues(emptyMap())) }
     var status by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
+    var weekRefresh by remember { mutableStateOf(0) }
 
-    // Jahresauswertung: 0 = aktuelles Jahr, Zurückblättern in frühere Jahre
+    // Jahresauswertung: aktuelles Jahr, mit Navigation zu früheren Jahren
     var year by remember { mutableStateOf(today.year) }
     var yearSteps by remember { mutableStateOf<Map<LocalDate, Int>>(emptyMap()) }
     var yearLoading by remember { mutableStateOf(false) }
     var yearStatus by remember { mutableStateOf("") }
+    var yearRefresh by remember { mutableStateOf(0) }
 
-    LaunchedEffect(monday) {
-        if (apiKey.isBlank()) {
-            status = "Schritte kommen von Garmin. Verbinde Garmin unter Einstellungen."
-        } else {
-            loading = true
-            val result = withContext(Dispatchers.IO) {
-                runCatching { fetchWeekValues(apiKey, monday, sunday) }
+    LaunchedEffect(monday, weekRefresh, period) {
+        if (period == GoalPeriod.WEEK) {
+            if (apiKey.isBlank()) {
+                status = "Schritte kommen von Garmin. Verbinde Garmin unter Einstellungen."
+            } else {
+                values = WeekValues(emptyMap())
+                loading = true
+                val result = withContext(Dispatchers.IO) {
+                    runCatching { fetchWeekValues(apiKey, monday, sunday) }
+                }
+                loading = false
+                result
+                    .onSuccess { values = it; status = "" }
+                    .onFailure { status = "Schritte konnten nicht geladen werden: ${it.message ?: "Unbekannt"}" }
             }
-            loading = false
-            result
-                .onSuccess { values = it; status = "" }
-                .onFailure { status = "Schritte konnten nicht geladen werden: ${it.message ?: "Unbekannt"}" }
         }
     }
 
-    LaunchedEffect(year) {
-        if (apiKey.isNotBlank()) {
-            yearLoading = true
-            val end = if (year == today.year) today else LocalDate.of(year, 12, 31)
-            val result = withContext(Dispatchers.IO) {
-                runCatching { fetchYearSteps(apiKey, LocalDate.of(year, 1, 1), end) }
+    LaunchedEffect(year, yearRefresh, period) {
+        if (period == GoalPeriod.YEAR) {
+            if (apiKey.isBlank()) {
+                yearSteps = emptyMap()
+                yearStatus = "Schritte fürs Jahr kommen von Garmin. Verbinde Garmin unter Einstellungen."
+            } else {
+                yearSteps = emptyMap()
+                yearLoading = true
+                val end = if (year == today.year) today else LocalDate.of(year, 12, 31)
+                val result = withContext(Dispatchers.IO) {
+                    runCatching { fetchYearSteps(apiKey, LocalDate.of(year, 1, 1), end) }
+                }
+                yearLoading = false
+                result
+                    .onSuccess { yearSteps = it; yearStatus = "" }
+                    .onFailure { yearStatus = "Schritte fürs Jahr konnten nicht geladen werden: ${it.message ?: "Unbekannt"}" }
             }
-            yearLoading = false
-            result
-                .onSuccess { yearSteps = it; yearStatus = "" }
-                .onFailure { yearStatus = "Schritte fürs Jahr konnten nicht geladen werden: ${it.message ?: "Unbekannt"}" }
         }
     }
 
@@ -171,7 +184,7 @@ fun WeeklyGoalContent(activities: List<Activity>, modifier: Modifier = Modifier)
     val weekTotal = dayCounts.filterNotNull().sum()
 
     val yearStats = Goal.entries.map { goal ->
-        yearStat(goal, year, today, activities, yearSteps + values.steps)
+        yearStat(goal, year, today, activities, yearSteps)
     }
 
     Column(
@@ -181,154 +194,196 @@ fun WeeklyGoalContent(activities: List<Activity>, modifier: Modifier = Modifier)
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // Seitentitel: 28 sp, fett (einheitlich auf allen Seiten)
-        Text("Mein Wochenziel", fontSize = 28.sp, fontWeight = FontWeight.Bold)
+        Text("Ziele", fontSize = 28.sp, fontWeight = FontWeight.Bold)
+        Text("Dein Fortschritt auf einen Blick", fontSize = 16.sp)
 
-        // Wochen-Navigation
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            OutlinedButton(onClick = { weekOffset-- }) {
-                Text("‹ Zurück", fontSize = 16.sp)
+        // Zwei klare Ansichten statt langer Wochen- und Jahresliste
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (period == GoalPeriod.WEEK) {
+                Button(onClick = {}, modifier = Modifier.weight(1f)) {
+                    Text("Woche", fontSize = 16.sp)
+                }
+            } else {
+                OutlinedButton(onClick = { period = GoalPeriod.WEEK }, modifier = Modifier.weight(1f)) {
+                    Text("Woche", fontSize = 16.sp)
+                }
             }
-            Column(
-                modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+            if (period == GoalPeriod.YEAR) {
+                Button(onClick = {}, modifier = Modifier.weight(1f)) {
+                    Text("Jahr", fontSize = 16.sp)
+                }
+            } else {
+                OutlinedButton(onClick = { period = GoalPeriod.YEAR }, modifier = Modifier.weight(1f)) {
+                    Text("Jahr", fontSize = 16.sp)
+                }
+            }
+        }
+
+        if (period == GoalPeriod.WEEK) {
+            // Wochen-Navigation
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text(
-                    "${monday.format(shortDate)} – ${sunday.format(dateFormatter)}",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(if (isCurrentWeek) "Diese Woche" else "Rückblick", fontSize = 14.sp)
-            }
-            OutlinedButton(onClick = { weekOffset++ }, enabled = !isCurrentWeek) {
-                Text("Weiter ›", fontSize = 16.sp)
-            }
-        }
-
-        // Wochenübersicht
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                // Kopfzeile mit Wochentag und Datum, heute ist hervorgehoben
-                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Spacer(modifier = Modifier.width(labelWidth))
-                    days.forEachIndexed { index, day ->
-                        val isToday = day == today
-                        Column(
-                            modifier = Modifier.weight(1f),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Text(
-                                dayNames[index],
-                                fontSize = 14.sp,
-                                fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal,
-                                color = if (isToday) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                                textAlign = TextAlign.Center
-                            )
-                            Text(
-                                day.dayOfMonth.toString(),
-                                fontSize = 14.sp,
-                                fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal,
-                                color = if (isToday) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                                textAlign = TextAlign.Center
-                            )
-                        }
-                    }
+                OutlinedButton(onClick = { weekOffset-- }) {
+                    Text("‹ Zurück", fontSize = 16.sp)
                 }
-
-                Goal.entries.forEach { goal ->
-                    GoalRow(goal, days, today, activities, values)
-                }
-
-                // Anzahl der Haken pro Tag und Summe der Woche
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                    Text(
-                        "✓ Haken pro Tag",
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.width(labelWidth)
-                    )
-                    dayCounts.forEach { count ->
-                        Text(
-                            count?.toString() ?: "",
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                }
-                Text("Summe der Woche: $weekTotal Haken", fontSize = 16.sp, fontWeight = FontWeight.Bold)
-
-                if (loading) {
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                }
-                if (status.isNotEmpty()) {
-                    Text(status, fontSize = 14.sp)
-                }
-            }
-        }
-
-        // Jahresübersicht mit Zurückblättern in frühere Jahre
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                Column(
+                    modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Text("Jahresziele", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedButton(onClick = { year-- }) {
-                            Text("‹", fontSize = 16.sp)
-                        }
-                        Text(
-                            "$year",
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 12.dp)
-                        )
-                        OutlinedButton(onClick = { year++ }, enabled = year < today.year) {
-                            Text("›", fontSize = 16.sp)
+                    Text(
+                        "${monday.format(shortDate)} – ${sunday.format(dateFormatter)}",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(if (isCurrentWeek) "Diese Woche" else "Rückblick", fontSize = 14.sp)
+                }
+                OutlinedButton(onClick = { weekOffset++ }, enabled = !isCurrentWeek) {
+                    Text("Weiter ›", fontSize = 16.sp)
+                }
+            }
+
+            // Wochenübersicht
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    // Kopfzeile mit Wochentag und Datum, heute ist hervorgehoben
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Spacer(modifier = Modifier.width(labelWidth))
+                        days.forEachIndexed { index, day ->
+                            val isToday = day == today
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text(
+                                    dayNames[index],
+                                    fontSize = 14.sp,
+                                    fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (isToday) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                    textAlign = TextAlign.Center
+                                )
+                                Text(
+                                    day.dayOfMonth.toString(),
+                                    fontSize = 14.sp,
+                                    fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (isToday) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
                         }
                     }
-                }
 
-                if (yearLoading) {
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                }
-                if (yearStatus.isNotEmpty()) {
-                    Text(yearStatus, fontSize = 14.sp)
-                }
+                    Goal.entries.forEach { goal ->
+                        GoalRow(goal, days, today, activities, values)
+                    }
 
-                yearStats.forEach { s ->
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text("${s.goal.symbol} ${s.goal.label}", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    // Anzahl der Haken pro Tag und Summe der Woche
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            "✓ Haken pro Tag",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.width(labelWidth)
+                        )
+                        dayCounts.forEach { count ->
                             Text(
-                                if (s.goal.weekly) "${s.done} von ${s.elapsed} Wochen"
-                                else "${s.done} von ${s.elapsed} Tagen",
+                                count?.toString() ?: "",
                                 fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Bold,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.weight(1f)
                             )
                         }
-                        Text(
-                            if (s.goal.weekly) "Ziel: ${s.target} Mal im Jahr"
-                            else "Ziel: ${s.target} Tage im Jahr",
-                            fontSize = 14.sp
-                        )
-                        GoalBar(
-                            fraction = if (s.target == 0) 0f else s.done.toFloat() / s.target,
-                            color = s.goal.color
-                        )
+                    }
+                    Text("Summe der Woche: $weekTotal Haken", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+
+                    if (loading) {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
+                    if (status.isNotEmpty()) {
+                        Text(status, fontSize = 14.sp)
                     }
                 }
+            }
+
+            // Aktualisieren steht am Ende der Wochenansicht
+            Button(
+                onClick = { weekRefresh++ },
+                enabled = !loading,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(if (loading) "Wird aktualisiert …" else "↻ Aktualisieren", fontSize = 16.sp)
+            }
+        } else {
+            // Jahresübersicht: eine Ansicht mit Jahr-Navigation und Fortschritt je Ziel
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Jahresziele", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            OutlinedButton(onClick = { year-- }) {
+                                Text("‹", fontSize = 16.sp)
+                            }
+                            Text(
+                                "$year",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 12.dp)
+                            )
+                            OutlinedButton(onClick = { year++ }, enabled = year < today.year) {
+                                Text("›", fontSize = 16.sp)
+                            }
+                        }
+                    }
+
+                    if (yearLoading) {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
+                    if (yearStatus.isNotEmpty()) {
+                        Text(yearStatus, fontSize = 14.sp)
+                    }
+
+                    yearStats.forEach { s ->
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("${s.goal.symbol} ${s.goal.label}", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    if (s.goal.weekly) "${s.done} von ${s.elapsed} Wochen"
+                                    else "${s.done} von ${s.elapsed} Tagen",
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Text(
+                                if (s.goal.weekly) "Ziel: mindestens 1× pro Woche"
+                                else "Ziel: jeden Tag",
+                                fontSize = 14.sp
+                            )
+                            GoalBar(
+                                fraction = if (s.elapsed == 0) 0f else s.done.toFloat() / s.elapsed,
+                                color = s.goal.color
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Aktualisieren steht am Ende der Jahresansicht
+            Button(
+                onClick = { yearRefresh++ },
+                enabled = !yearLoading,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(if (yearLoading) "Wird aktualisiert …" else "↻ Aktualisieren", fontSize = 16.sp)
             }
         }
     }
