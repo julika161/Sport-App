@@ -2,10 +2,12 @@ package com.julia.sportapp
 
 import com.garmin.fit.FitDecoder
 import com.julia.sportapp.data.ActivityDatabase
+import com.julia.sportapp.data.ActivityType
 import com.julia.sportapp.data.RunDetail
 import com.julia.sportapp.data.RunLap
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.zip.ZipInputStream
@@ -15,17 +17,23 @@ private const val GARMIN_RUN_FILES = "https://personal.connectapi.garmin.com/dow
 private const val MAX_RUN_FILE_BYTES = 25 * 1024 * 1024
 private const val MAX_RUN_DETAILS_PER_SYNC = 15
 
-data class RunDetailSyncResult(val saved: Int, val failed: Int)
+data class RunDetailSyncResult(
+    val attempted: Int,
+    val saved: Int,
+    val failed: Int,
+    val lastFailure: String?
+)
 
-// Lädt nur bisher fehlende Laufdetails; der FIT-Inhalt wird direkt im Arbeitsspeicher dekodiert.
+// Lädt bisher fehlende Laufdetails. Die FIT-Datei wird nur im Arbeitsspeicher verarbeitet.
 fun syncRunDetails(db: ActivityDatabase, token: String): RunDetailSyncResult {
     val candidates = db.getAll()
-        .filter { it.type == com.julia.sportapp.data.ActivityType.LAUFEN && it.garminId != null }
+        .filter { it.type == ActivityType.LAUFEN && it.garminId != null }
         .filter { db.getRunDetail(it.garminId!!) == null }
         .take(MAX_RUN_DETAILS_PER_SYNC)
 
     var saved = 0
     var failed = 0
+    var lastFailure: String? = null
     candidates.forEach { activity ->
         val garminId = activity.garminId ?: return@forEach
         val result = runCatching {
@@ -36,11 +44,18 @@ fun syncRunDetails(db: ActivityDatabase, token: String): RunDetailSyncResult {
         result.onSuccess { detail ->
             db.saveRunDetail(detail)
             saved++
-        }.onFailure {
+        }.onFailure { error ->
             failed++
+            lastFailure = safeFailureMessage(error)
         }
     }
-    return RunDetailSyncResult(saved, failed)
+    return RunDetailSyncResult(candidates.size, saved, failed, lastFailure)
+}
+
+private fun safeFailureMessage(error: Throwable): String = when (error) {
+    is GarminException -> error.message ?: "Garmin-Fehler"
+    is IOException -> "Netzwerk- oder Dateidownloadfehler"
+    else -> "Die FIT-Datei konnte nicht gelesen werden"
 }
 
 private fun downloadActivityFile(token: String, garminId: String): ByteArray {
@@ -49,11 +64,11 @@ private fun downloadActivityFile(token: String, garminId: String): ByteArray {
         connection.requestMethod = "GET"
         connection.connectTimeout = 15000
         connection.readTimeout = 30000
-        connection.setRequestProperty("Accept", "application/zip, application/octet-stream")
+        connection.setRequestProperty("Accept", "*/*")
         connection.setRequestProperty("Authorization", "Bearer $token")
         val code = connection.responseCode
         if (code == 401 || code == 403) {
-            throw GarminException("Garmin hat den FIT-Download abgelehnt ($code).")
+            throw GarminException("Garmin hat den FIT-Download abgelehnt ($code). Prüfe die Berechtigung des Personal-API-Schlüssels.")
         }
         if (code !in 200..299) {
             throw GarminException("FIT-Download von Garmin fehlgeschlagen ($code).")
