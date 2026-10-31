@@ -14,13 +14,6 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlin.math.roundToInt
 
-private data class SuggestedWorkout(
-    val title: String,
-    val durationMinutes: Int,
-    val description: String,
-    val isRunning: Boolean = true
-)
-
 // Kleine, nachvollziehbare Vorschläge aus lokalen Laufdaten; kein KI-Dienst wird verwendet.
 @Composable
 fun RunningRecommendations(
@@ -38,15 +31,15 @@ fun RunningRecommendations(
         recentRuns.filter { !it.date.isBefore(today.minusDays(28)) && !it.date.isAfter(today) }
             .take(3)
     }
-    val averageMinutes = recent.map { run ->
-        (run.durationSeconds?.toDouble()?.div(60.0) ?: run.durationMinutes.toDouble())
-    }.average().takeIf { it.isFinite() }?.roundToInt()
     val referencePaceSeconds = recent.mapNotNull { run ->
         val distance = run.distanceKm?.takeIf { it > 0.0 } ?: return@mapNotNull null
         val duration = run.durationSeconds ?: run.durationMinutes * 60
         if (duration <= 0) null else duration / distance
     }.average().takeIf { it.isFinite() && it > 0.0 }?.roundToInt()
     val referenceSpeedKmh = referencePaceSeconds?.let { 3600.0 / it }
+    val sessions = remember(recentRuns, availableDays) {
+        buildCoachSessions(recentRuns, availableDays)
+    }
     val zoneTwo = heartRateZones.firstOrNull { it.number == 2 }
     val zoneTwoTarget = zoneTwo?.let { zone ->
         val min = zone.minBpm
@@ -56,49 +49,6 @@ fun RunningRecommendations(
     val zoneTwoLabel = zoneTwo?.let { zone ->
         if (zone.sport.equals("DEFAULT", ignoreCase = true)) "Garmin-Standardzone 2" else "Garmin-Laufzone 2"
     }
-
-    val sessions = remember(recent, averageMinutes) {
-        if (recent.size >= 2 && averageMinutes != null) {
-            val longestRecent = recent.maxOf { it.durationMinutes }
-            listOf(
-                SuggestedWorkout(
-                    "Locker laufen",
-                    roundToFive((averageMinutes * 0.75).roundToInt()).coerceIn(15, 40),
-                    "Bequem bleiben und das Zieltempo nicht erzwingen."
-                ),
-                SuggestedWorkout(
-                    "Ruhiger Dauerlauf",
-                    roundToFive(averageMinutes).coerceIn(20, 45),
-                    "Gleichmäßig laufen; bei Müdigkeit kürzer machen."
-                ),
-                SuggestedWorkout(
-                    "Etwas länger, weiterhin locker",
-                    (longestRecent + 5).coerceIn(15, 60),
-                    "Nur steigern, wenn sich die vorherigen Läufe gut angefühlt haben."
-                )
-            )
-        } else {
-            listOf(
-                SuggestedWorkout(
-                    "Locker starten",
-                    20,
-                    "Lauf-/Geh-Wechsel: 1 Min. locker traben, 2 Min. gehen."
-                ),
-                SuggestedWorkout(
-                    "Erholung & Bewegung",
-                    15,
-                    "Spaziergang oder sanfte Mobility; ein Ruhetag ist auch Training.",
-                    isRunning = false
-                ),
-                SuggestedWorkout(
-                    "Lauf-/Geh-Wechsel wiederholen",
-                    20,
-                    "Nur wiederholen, wenn sich der erste Lauf gut angefühlt hat."
-                )
-            )
-        }
-    }
-    val dayLabels = remember(availableDays) { nextAvailableDayLabels(availableDays, sessions.size) }
 
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -122,12 +72,15 @@ fun RunningRecommendations(
 
             sessions.forEachIndexed { index, workout ->
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    val day = dayLabels.getOrNull(index)
+                    val dateLabel = workout.date?.format(
+                        DateTimeFormatter.ofPattern("EEE dd.MM.", Locale.GERMAN)
+                    )
                     Text(
                         buildString {
                             append("${index + 1}. ${workout.title}")
-                            if (day != null) append(" · $day")
+                            if (dateLabel != null) append(" · $dateLabel")
                             else if (availableDays.isEmpty()) append(" · Tag offen")
+                            else append(" · Termin noch offen")
                         },
                         fontSize = 16.sp,
                         fontWeight = FontWeight.SemiBold
@@ -166,6 +119,13 @@ fun RunningRecommendations(
                 fontSize = 13.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            if (availableDays.isEmpty()) {
+                Text(
+                    "Wähle mögliche Trainingstage und speichere dein Ziel, damit konkrete Coach-Termine im Kalender erscheinen.",
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             if (zoneTwoTarget == null && !zonesLoading) {
                 Text(
                     zonesMessage.ifBlank { "Keine persönliche Garmin-Laufzone 2 verfügbar; bis dahin gilt das Gesprächstempo." },
@@ -180,23 +140,6 @@ fun RunningRecommendations(
             )
         }
     }
-}
-
-private fun roundToFive(minutes: Int): Int = ((minutes + 2) / 5) * 5
-
-private fun nextAvailableDayLabels(availableDays: Set<String>, count: Int): List<String> {
-    if (availableDays.isEmpty()) return emptyList()
-    val labels = listOf("Mo", "Di", "Mi", "Do", "Fr", "Sa", "So")
-    val formatter = DateTimeFormatter.ofPattern("EEE dd.MM.", Locale.GERMAN)
-    val result = mutableListOf<String>()
-    var offset = 1L
-    while (result.size < count && offset <= 28L) {
-        val date = LocalDate.now().plusDays(offset)
-        val code = labels[date.dayOfWeek.value - 1]
-        if (code in availableDays) result.add(date.format(formatter))
-        offset++
-    }
-    return result
 }
 
 private fun formatRecommendationPace(minutesPerKm: Double): String {
