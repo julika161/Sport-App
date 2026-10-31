@@ -37,9 +37,6 @@ fun RunningRecommendations(
         if (duration <= 0) null else duration / distance
     }.average().takeIf { it.isFinite() && it > 0.0 }?.roundToInt()
     val referenceSpeedKmh = referencePaceSeconds?.let { 3600.0 / it }
-    val sessions = remember(recentRuns, availableDays) {
-        buildCoachSessions(recentRuns, availableDays)
-    }
     val zoneTwo = heartRateZones.firstOrNull { it.number == 2 }
     val zoneTwoTarget = zoneTwo?.let { zone ->
         val min = zone.minBpm
@@ -49,6 +46,12 @@ fun RunningRecommendations(
     val zoneTwoLabel = zoneTwo?.let { zone ->
         if (zone.sport.equals("DEFAULT", ignoreCase = true)) "Garmin-Standardzone 2" else "Garmin-Laufzone 2"
     }
+    val heartRateTarget = coachZoneTwoTarget(heartRateZones)
+    val parsedTargetDate = parseCoachTargetDate(targetDateText)
+    val fullPlan = remember(recentRuns, availableDays, parsedTargetDate, heartRateTarget) {
+        buildCoachSessions(recentRuns, availableDays, parsedTargetDate, heartRateTarget)
+    }
+    val sessions = fullPlan.take(3)
 
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
