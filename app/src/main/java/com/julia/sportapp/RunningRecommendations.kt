@@ -30,7 +30,8 @@ fun RunningRecommendations(
     recentRuns: List<Activity>,
     availableDays: Set<String>,
     heartRateZones: List<HeartRateZone>,
-    zonesLoading: Boolean
+    zonesLoading: Boolean,
+    zonesMessage: String
 ) {
     val today = LocalDate.now()
     val recent = remember(recentRuns) {
@@ -47,6 +48,11 @@ fun RunningRecommendations(
     }.average().takeIf { it.isFinite() && it > 0.0 }?.roundToInt()
     val referenceSpeedKmh = referencePaceSeconds?.let { 3600.0 / it }
     val zoneTwo = heartRateZones.firstOrNull { it.number == 2 }
+    val zoneTwoTarget = zoneTwo?.let { zone ->
+        val min = zone.minBpm
+        val max = zone.maxBpm
+        if (min != null && max != null) "$min–$max bpm" else null
+    }
 
     val sessions = remember(recent, averageMinutes) {
         if (recent.size >= 2 && averageMinutes != null) {
@@ -134,8 +140,7 @@ fun RunningRecommendations(
                         Text(
                             when {
                                 zonesLoading -> "Pulsziel: Garmin-Laufzone wird geladen …"
-                                zoneTwo?.minBpm != null && zoneTwo.maxBpm != null ->
-                                    "Pulsziel: Garmin-Zone 2 · ${zoneTwo.minBpm}–${zoneTwo.maxBpm} bpm"
+                                zoneTwoTarget != null -> "Pulsziel: Garmin-Zone 2 · $zoneTwoTarget"
                                 else -> "Pulsziel: lockeres Gesprächstempo; kein bpm-Wert geraten."
                             },
                             fontSize = 14.sp,
@@ -158,9 +163,9 @@ fun RunningRecommendations(
                 fontSize = 13.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            if (zoneTwo == null && !zonesLoading) {
+            if (zoneTwoTarget == null && !zonesLoading) {
                 Text(
-                    "Deine persönlichen Garmin-Zonen sind noch nicht verfügbar. Verbinde Garmin unter Einstellungen; bis dahin gilt das Gesprächstempo.",
+                    zonesMessage.ifBlank { "Keine persönliche Garmin-Laufzone 2 verfügbar; bis dahin gilt das Gesprächstempo." },
                     fontSize = 13.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
