@@ -13,12 +13,13 @@ enum class ActivityType(val label: String, val symbol: String) {
     HIIT("HIIT", "🔥")
 }
 
-// Eine gespeicherte Trainingseinheit. garminId ist nur bei importierten Einheiten gefüllt.
+// Eine gespeicherte Trainingseinheit. Garmin-ID und exakte Sekunden gibt es bei importierten Einheiten.
 data class Activity(
     val type: ActivityType,
     val date: LocalDate,
     val time: LocalTime,
     val durationMinutes: Int,
     val distanceKm: Double?,
-    val garminId: String? = null
+    val garminId: String? = null,
+    val durationSeconds: Int? = null
 )
