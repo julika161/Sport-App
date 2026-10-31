@@ -19,6 +19,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
+import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.time.LocalDate
@@ -30,6 +31,9 @@ import kotlin.math.roundToInt
 private const val GARMIN_BASE = "https://personal.connectapi.garmin.com"
 private const val PREFS_GARMIN = "sportapp_garmin"
 private const val KEY_API = "api_key"
+private const val ACTIVITY_LOOKBACK_DAYS = 120L
+private const val ACTIVITY_PAGE_SIZE = 100
+private const val MAX_ACTIVITY_PAGES = 50
 
 class GarminException(message: String) : Exception(message)
 
@@ -39,7 +43,7 @@ private data class GarminActivityBatch(
     val accessToken: String
 )
 
-// Schlüssel nur lokal auf dem Handy speichern (wird nicht gesichert).
+// Der Schlüssel bleibt lokal auf dem Handy und wird nicht gesichert.
 fun loadApiKey(context: Context): String =
     context.getSharedPreferences(PREFS_GARMIN, Context.MODE_PRIVATE).getString(KEY_API, "") ?: ""
 
@@ -55,7 +59,7 @@ private fun httpRequest(url: String, method: String, headers: Map<String, String
         conn.requestMethod = method
         conn.connectTimeout = 15000
         conn.readTimeout = 15000
-        headers.forEach { (k, v) -> conn.setRequestProperty(k, v) }
+        headers.forEach { (key, value) -> conn.setRequestProperty(key, value) }
         val code = conn.responseCode
         when {
             code == 401 || code == 403 ->
@@ -80,7 +84,7 @@ private fun mapType(typeKey: String): ActivityType? = when (typeKey) {
     else -> null
 }
 
-// Holt die Einheiten der letzten 60 Tage und bewahrt die Laufdauer in Sekunden auf.
+// Holt die letzten 120 Tage seitenweise, damit auch ältere und weiter hinten gelistete Einheiten ankommen.
 private fun fetchGarminActivities(apiKey: String): GarminActivityBatch {
     val token = httpRequest(
         "$GARMIN_BASE/personalapitoken-service/personal-api/personal-api-key/token",
@@ -88,18 +92,35 @@ private fun fetchGarminActivities(apiKey: String): GarminActivityBatch {
         mapOf("Accept" to "*/*", "Authorization" to "ApiKey $apiKey")
     ).trim()
 
-    val end = LocalDate.now()
-    val start = end.minusDays(60)
-    val json = httpRequest(
-        "$GARMIN_BASE/activitylist-service/activities/search/activities?start=0&limit=100&startDate=$start&endDate=$end",
-        "GET",
-        mapOf("Accept" to "application/json", "Authorization" to "Bearer $token")
-    )
+    val endDate = LocalDate.now()
+    val startDate = endDate.minusDays(ACTIVITY_LOOKBACK_DAYS)
+    val allItems = mutableListOf<JSONObject>()
+    var offset = 0
+    var pageCount = 0
+    var lastPageSize = 0
 
-    val array = JSONArray(json)
+    while (pageCount < MAX_ACTIVITY_PAGES) {
+        val response = httpRequest(
+            "$GARMIN_BASE/activitylist-service/activities/search/activities?start=$offset&limit=$ACTIVITY_PAGE_SIZE&startDate=$startDate&endDate=$endDate",
+            "GET",
+            mapOf("Accept" to "application/json", "Authorization" to "Bearer $token")
+        )
+        val page = JSONArray(response)
+        lastPageSize = page.length()
+        for (index in 0 until page.length()) {
+            allItems.add(page.getJSONObject(index))
+        }
+        pageCount++
+        if (page.length() < ACTIVITY_PAGE_SIZE) break
+        offset += ACTIVITY_PAGE_SIZE
+    }
+
+    if (pageCount == MAX_ACTIVITY_PAGES && lastPageSize == ACTIVITY_PAGE_SIZE) {
+        throw GarminException("Der Garmin-Import umfasst mehr als ${MAX_ACTIVITY_PAGES * ACTIVITY_PAGE_SIZE} Einträge. Bitte synchronisiere später erneut.")
+    }
+
     val mapped = mutableListOf<Activity>()
-    for (i in 0 until array.length()) {
-        val item = array.getJSONObject(i)
+    for (item in allItems) {
         val typeKey = item.optJSONObject("activityType")?.optString("typeKey") ?: continue
         val type = mapType(typeKey) ?: continue
         val startLocal = LocalDateTime.parse(item.getString("startTimeLocal").replace(' ', 'T'))
@@ -119,7 +140,7 @@ private fun fetchGarminActivities(apiKey: String): GarminActivityBatch {
             )
         )
     }
-    return GarminActivityBatch(array.length(), mapped, token)
+    return GarminActivityBatch(allItems.size, mapped, token)
 }
 
 // Übernimmt neue Einheiten und aktualisiert vorhandene Garmin-Einträge mit exakten Sekunden.
@@ -162,7 +183,7 @@ private fun importGarmin(db: ActivityDatabase, apiKey: String): String {
         "$added neu übernommen, $updated aktualisiert. $detailsMessage"
 }
 
-// Garmin verbinden und die Aktivitäts- sowie Laufdetails auf das Gerät laden.
+// Garmin verbinden und Aktivitäten sowie Laufdetails lokal speichern.
 @Composable
 fun GarminSyncCard(db: ActivityDatabase, onImported: () -> Unit) {
     val context = LocalContext.current
@@ -172,10 +193,7 @@ fun GarminSyncCard(db: ActivityDatabase, onImported: () -> Unit) {
     var busy by remember { mutableStateOf(false) }
 
     Card(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Garmin verbinden", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
             Text("Der Schlüssel wird nur auf diesem Handy gespeichert.", fontSize = 14.sp)
 
@@ -185,10 +203,7 @@ fun GarminSyncCard(db: ActivityDatabase, onImported: () -> Unit) {
                 label = { Text("Personal-API-Schlüssel") },
                 singleLine = true,
                 visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.Password,
-                    autoCorrect = false
-                ),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrect = false),
                 modifier = Modifier.fillMaxWidth()
             )
 
@@ -207,23 +222,19 @@ fun GarminSyncCard(db: ActivityDatabase, onImported: () -> Unit) {
                                 status = text
                                 onImported()
                             },
-                            onFailure = { e ->
-                                status = "Fehler: ${e.message ?: "Unbekannt"}"
+                            onFailure = { error ->
+                                status = "Fehler: ${error.message ?: "Unbekannt"}"
                             }
                         )
                     }
                 },
                 enabled = !busy && apiKey.isNotBlank(),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp)
+                modifier = Modifier.fillMaxWidth().height(56.dp)
             ) {
                 Text(if (busy) "Synchronisiere …" else "Jetzt synchronisieren", fontSize = 18.sp)
             }
 
-            if (status.isNotEmpty()) {
-                Text(status, fontSize = 15.sp)
-            }
+            if (status.isNotEmpty()) Text(status, fontSize = 15.sp)
         }
     }
 }
