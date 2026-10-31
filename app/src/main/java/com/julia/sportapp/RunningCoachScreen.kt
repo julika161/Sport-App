@@ -192,11 +192,9 @@ fun RunningCoachContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
                 recentRuns = recentRuns,
                 availableDays = selectedDays,
                 heartRateZones = heartRateZones,
-                zonesLoading = zonesLoading
+                zonesLoading = zonesLoading,
+                zonesMessage = zonesMessage
             )
-            if (!zonesLoading && zonesMessage.isNotBlank()) {
-                Text(zonesMessage, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
         }
     }
 }
