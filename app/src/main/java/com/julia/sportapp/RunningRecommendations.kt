@@ -53,6 +53,9 @@ fun RunningRecommendations(
         val max = zone.maxBpm
         if (min != null && max != null) "$min–$max bpm" else null
     }
+    val zoneTwoLabel = zoneTwo?.let { zone ->
+        if (zone.sport.equals("DEFAULT", ignoreCase = true)) "Garmin-Standardzone 2" else "Garmin-Laufzone 2"
+    }
 
     val sessions = remember(recent, averageMinutes) {
         if (recent.size >= 2 && averageMinutes != null) {
@@ -140,7 +143,7 @@ fun RunningRecommendations(
                         Text(
                             when {
                                 zonesLoading -> "Pulsziel: Garmin-Laufzone wird geladen …"
-                                zoneTwoTarget != null -> "Pulsziel: Garmin-Zone 2 · $zoneTwoTarget"
+                                zoneTwoTarget != null && zoneTwoLabel != null -> "Pulsziel: $zoneTwoLabel · $zoneTwoTarget"
                                 else -> "Pulsziel: lockeres Gesprächstempo; kein bpm-Wert geraten."
                             },
                             fontSize = 14.sp,
