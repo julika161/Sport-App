@@ -86,9 +86,19 @@ private fun fetchBody(apiKey: String): GarminHealthSnapshot {
     val fitness = safeFetchObject(errors, "Fitnessalter") {
         JSONObject(garminGet(token, "/fitnessage-service/fitnessage/v2/$today"))
     }
+
+    // VO₂max is optional: try the date range first, then Garmin's latest-value route.
+    val vo2Errors = mutableMapOf<String, String>()
     val vo2StartDate = LocalDate.now().minusDays(180).toString()
-    val vo2Data = safeFetchJson(errors, "VO₂max") {
+    val vo2Range = safeFetchJson(vo2Errors, "VO₂max") {
         parseHealthJson(garminGet(token, "/metrics-service/metrics/maxmet/daily/$vo2StartDate/$today"))
+    }
+    var vo2MaxValue = vo2Range?.let { findLatestVo2Max(it) }
+    if (vo2MaxValue == null) {
+        val latestVo2 = safeFetchJson(vo2Errors, "VO₂max") {
+            parseHealthJson(garminGet(token, "/metrics-service/metrics/maxmet/latest/$today"))
+        }
+        vo2MaxValue = latestVo2?.let { findLatestVo2Max(it) }
     }
 
     val sleepObject = sleep?.let { findSleepPayload(it) }
@@ -118,7 +128,7 @@ private fun fetchBody(apiKey: String): GarminHealthSnapshot {
         lowestSpO2 = spo2?.firstInt("lowestSpO2"),
         fitnessAge = fitness?.firstInt("fitnessAge"),
         chronologicalAge = fitness?.firstInt("chronologicalAge"),
-        vo2Max = vo2Data?.let { findLatestVo2Max(it) },
+        vo2Max = vo2MaxValue,
         errors = errors.toMap()
     )
 }
@@ -396,9 +406,9 @@ fun BodyContent(modifier: Modifier = Modifier) {
                     data.batteryDrained?.let { "−$it verbraucht" }
                 ).joinToString(" · ")
                 val batteryDetail = when {
-                    data.bodyBattery != null && batteryChanges.isNotBlank() -> "Stand jetzt · $batteryChanges"
-                    data.bodyBattery != null -> "Aktueller Stand"
-                    batteryChanges.isNotBlank() -> "$batteryChanges · aktueller Stand fehlt"
+                    data.bodyBattery != null && batteryChanges.isNotBlank() -> batteryChanges
+                    data.bodyBattery != null -> "Letzter Stand heute"
+                    batteryChanges.isNotBlank() -> "$batteryChanges · Stand nicht geliefert"
                     else -> "Kein aktueller Stand geliefert"
                 }
                 HealthMetricTile(
@@ -426,10 +436,9 @@ fun BodyContent(modifier: Modifier = Modifier) {
             Text("Weitere Tageswerte", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                    HealthValueRow(
-                        "VO₂max",
-                        data.vo2Max?.let { String.format(Locale.GERMAN, "%.1f ml/kg/min", it) } ?: "Nicht verfügbar"
-                    )
+                    data.vo2Max?.let { value ->
+                        HealthValueRow("VO₂max", String.format(Locale.GERMAN, "%.1f ml/kg/min", value))
+                    }
                     HealthValueRow("Stress · Garmin-Tageswert", data.stressAverage?.let { "$it/100" })
                     HealthValueRow("Schritte", data.steps?.toString())
                     HealthValueRow(
@@ -466,7 +475,7 @@ private fun HealthMetricTile(
     icon: ImageVector,
     modifier: Modifier = Modifier
 ) {
-    Card(modifier = modifier.heightIn(min = 126.dp)) {
+    Card(modifier = modifier.height(140.dp)) {
         Column(modifier = Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                 Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
