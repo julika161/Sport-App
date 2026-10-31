@@ -5,6 +5,8 @@ import com.julia.sportapp.data.Activity
 import org.json.JSONArray
 import org.json.JSONObject
 import java.time.LocalDate
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 import kotlin.math.roundToInt
 
 internal data class CoachPlannedSession(
@@ -12,7 +14,8 @@ internal data class CoachPlannedSession(
     val durationMinutes: Int,
     val description: String,
     val isRunning: Boolean,
-    val date: LocalDate?
+    val date: LocalDate?,
+    val heartRateTarget: String? = null
 )
 
 private data class CoachWorkoutTemplate(
@@ -26,10 +29,49 @@ private const val COACH_SCHEDULE_PREFS = "running_coach_local"
 private const val COACH_SCHEDULE_KEY = "planned_calendar_sessions"
 private val coachWeekdayCodes = listOf("Mo", "Di", "Mi", "Do", "Fr", "Sa", "So")
 
+internal fun parseCoachTargetDate(text: String): LocalDate? {
+    val value = text.trim()
+    if (value.isBlank()) return null
+    return runCatching {
+        LocalDate.parse(value, DateTimeFormatter.ofPattern("d.M.uuuu", Locale.GERMAN))
+    }.getOrNull() ?: runCatching {
+        LocalDate.parse(value, DateTimeFormatter.ISO_LOCAL_DATE)
+    }.getOrNull()
+}
+
+internal fun loadCoachTargetDate(context: Context): LocalDate? {
+    val prefs = context.getSharedPreferences(COACH_SCHEDULE_PREFS, Context.MODE_PRIVATE)
+    return parseCoachTargetDate(prefs.getString("target_date", "").orEmpty())
+}
+
+internal fun loadCoachGoalSummary(context: Context): String? {
+    val prefs = context.getSharedPreferences(COACH_SCHEDULE_PREFS, Context.MODE_PRIVATE)
+    val distance = prefs.getString("goal_distance_km", "").orEmpty().trim()
+    val time = prefs.getString("goal_time_minutes", "").orEmpty().trim()
+    val parts = listOfNotNull(
+        distance.takeIf { it.isNotBlank() }?.let { "$it km" },
+        time.takeIf { it.isNotBlank() }?.let { "$it Min." }
+    )
+    return parts.takeIf { it.isNotEmpty() }?.joinToString(" · ")
+}
+
+internal fun coachZoneTwoTarget(zones: List<HeartRateZone>): String {
+    val zone = zones.firstOrNull { it.number == 2 }
+        ?: return "Zone 2 · lockeres Gesprächstempo; Garmin-Bereich nicht verfügbar"
+    return when {
+        zone.minBpm != null && zone.maxBpm != null -> "Zone 2 · ${zone.minBpm}–${zone.maxBpm} bpm"
+        zone.minBpm != null -> "Zone 2 · ab ${zone.minBpm} bpm"
+        zone.maxBpm != null -> "Zone 2 · bis ${zone.maxBpm} bpm"
+        else -> "Zone 2 · lockeres Gesprächstempo; Garmin-Bereich nicht verfügbar"
+    }
+}
+
 // Gemeinsame Vorschläge für Coach-Seite und Kalender, damit beide dieselben Einheiten zeigen.
 internal fun buildCoachSessions(
     recentRuns: List<Activity>,
     availableDays: Set<String>,
+    targetDate: LocalDate?,
+    heartRateTarget: String,
     fromDate: LocalDate = LocalDate.now()
 ): List<CoachPlannedSession> {
     val recent = recentRuns.filter {
@@ -76,34 +118,50 @@ internal fun buildCoachSessions(
         )
     }
 
-    val dates = findUpcomingCoachDates(availableDays, workouts.size, fromDate)
-    return workouts.mapIndexed { index, workout ->
-        CoachPlannedSession(
-            title = workout.title,
-            durationMinutes = workout.durationMinutes,
-            description = workout.description,
-            isRunning = workout.isRunning,
-            date = dates.getOrNull(index)
-        )
+    val dates = findUpcomingCoachDates(availableDays, targetDate, fromDate)
+    val scheduled = dates.mapIndexed { index, date ->
+        val workout = workouts[index % workouts.size]
+        workout.toSession(date, heartRateTarget)
     }
+    val displayedSuggestions = workouts.drop(scheduled.size.coerceAtMost(workouts.size))
+        .map { workout -> workout.toSession(null, heartRateTarget) }
+    return scheduled + displayedSuggestions
 }
 
 private fun findUpcomingCoachDates(
     availableDays: Set<String>,
-    count: Int,
+    targetDate: LocalDate?,
     fromDate: LocalDate
 ): List<LocalDate> {
     if (availableDays.isEmpty()) return emptyList()
+    val lastTrainingDate = if (targetDate != null) {
+        targetDate.minusDays(1) // Zieltag bleibt für den Wettkampf oder das persönliche Ziel frei.
+    } else {
+        fromDate.plusDays(28)
+    }
+    if (lastTrainingDate.isBefore(fromDate.plusDays(1))) return emptyList()
+
     val dates = mutableListOf<LocalDate>()
-    var offset = 1L
-    while (dates.size < count && offset <= 28L) {
-        val date = fromDate.plusDays(offset)
+    var date = fromDate.plusDays(1)
+    while (!date.isAfter(lastTrainingDate)) {
         val weekdayCode = coachWeekdayCodes[date.dayOfWeek.value - 1]
         if (weekdayCode in availableDays) dates.add(date)
-        offset++
+        date = date.plusDays(1)
     }
     return dates
 }
+
+private fun CoachWorkoutTemplate.toSession(
+    date: LocalDate?,
+    heartRateTarget: String
+): CoachPlannedSession = CoachPlannedSession(
+    title = title,
+    durationMinutes = durationMinutes,
+    description = description,
+    isRunning = isRunning,
+    date = date,
+    heartRateTarget = heartRateTarget
+)
 
 internal fun saveCoachSchedule(context: Context, sessions: List<CoachPlannedSession>) {
     val json = JSONArray()
@@ -115,6 +173,7 @@ internal fun saveCoachSchedule(context: Context, sessions: List<CoachPlannedSess
                 .put("durationMinutes", session.durationMinutes)
                 .put("description", session.description)
                 .put("isRunning", session.isRunning)
+                .put("heartRateTarget", session.heartRateTarget)
         )
     }
     context.getSharedPreferences(COACH_SCHEDULE_PREFS, Context.MODE_PRIVATE)
@@ -135,11 +194,13 @@ internal fun loadCoachSchedule(context: Context): List<CoachPlannedSession> {
                 durationMinutes = item.optInt("durationMinutes", 0),
                 description = item.optString("description", ""),
                 isRunning = item.optBoolean("isRunning", true),
-                date = date
+                date = date,
+                heartRateTarget = item.optString("heartRateTarget").takeIf { it.isNotBlank() }
             )
         )
     }
-    return sessions.sortedBy { it.date }
+    return sessions.filter { session -> session.date?.isBefore(LocalDate.now()) != true }
+        .sortedBy { it.date }
 }
 
 private fun roundToFive(minutes: Int): Int = ((minutes + 2) / 5) * 5
