@@ -44,6 +44,7 @@ fun RunningCoachContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
     var zonesMessage by remember { mutableStateOf("") }
 
     val recentRuns = remember(db) { db.getAll().filter { it.type == ActivityType.LAUFEN } }
+    val coachSessions = remember(recentRuns, selectedDays) { buildCoachSessions(recentRuns, selectedDays) }
     val distanceKm = distanceText.replace(',', '.').toDoubleOrNull()
     val targetMinutes = timeText.replace(',', '.').toDoubleOrNull()
     val validGoal = distanceKm != null && distanceKm > 0.0 && targetMinutes != null && targetMinutes > 0.0
@@ -165,7 +166,7 @@ fun RunningCoachContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
                     }
                 }
                 if (selectedDays.isEmpty()) {
-                    Text("Ohne Auswahl werden die Vorschläge nicht an feste Wochentage gebunden.", fontSize = 14.sp)
+                    Text("Wähle mindestens einen Tag, damit Coach-Einheiten konkrete Termine im Kalender erhalten.", fontSize = 14.sp)
                 }
             }
         }
@@ -179,8 +180,14 @@ fun RunningCoachContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
                     .putStringSet("available_days", selectedDays)
                     .remove("constraints")
                     .apply()
+                saveCoachSchedule(context, coachSessions)
                 goalSaved = true
-                savedMessage = "Ziel gespeichert · Trainingsvorschläge direkt darunter."
+                val scheduledCount = coachSessions.count { it.date != null }
+                savedMessage = if (scheduledCount > 0) {
+                    "Ziel gespeichert · $scheduledCount Coach-Einheiten im Kalender eingeplant."
+                } else {
+                    "Ziel gespeichert · Wähle mögliche Lauftage, um Coach-Einheiten im Kalender einzuplanen."
+                }
             },
             enabled = validGoal,
             modifier = Modifier.fillMaxWidth().height(54.dp)
