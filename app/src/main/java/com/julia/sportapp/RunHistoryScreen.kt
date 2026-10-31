@@ -13,6 +13,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.julia.sportapp.data.Activity
 import com.julia.sportapp.data.ActivityDatabase
+import com.julia.sportapp.data.ActivityType
 import com.julia.sportapp.data.RunDetail
 import com.julia.sportapp.data.RunLap
 import java.util.Locale
@@ -20,23 +21,22 @@ import java.util.Locale
 // Liste und antippbare Detailseite vergangener Läufe.
 @Composable
 fun RunHistoryContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
-    val runs = remember(db) { db.getAll().filter { it.type == com.julia.sportapp.data.ActivityType.LAUFEN } }
+    val runs = remember(db) { db.getAll().filter { it.type == ActivityType.LAUFEN } }
     val details = remember(db) { db.getAllRunDetails() }
-    var selectedGarminId by remember { mutableStateOf<String?>(null) }
-    val selectedRun = runs.firstOrNull { it.garminId == selectedGarminId }
+    var selectedRun by remember { mutableStateOf<Activity?>(null) }
 
     if (selectedRun != null) {
         RunDetailContent(
-            activity = selectedRun,
-            detail = selectedRun.garminId?.let { details[it] },
-            onBack = { selectedGarminId = null },
+            activity = selectedRun!!,
+            detail = selectedRun!!.garminId?.let { details[it] },
+            onBack = { selectedRun = null },
             modifier = modifier
         )
     } else {
         RunListContent(
             runs = runs,
             details = details,
-            onRunClick = { run -> selectedGarminId = run.garminId },
+            onRunClick = { run -> selectedRun = run },
             modifier = modifier
         )
     }
@@ -129,7 +129,7 @@ private fun RunDetailContent(
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Übersicht", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-                RunMetricRow("Distanz", activity.distanceKm?.let { "%.2f km".format(Locale.GERMAN, it) } ?: null)
+                RunMetricRow("Distanz", activity.distanceKm?.let { "%.2f km".format(Locale.GERMAN, it) })
                 RunMetricRow("Dauer", detail?.durationSeconds?.let { formatRunDuration(it) } ?: "${activity.durationMinutes} Min.")
                 RunMetricRow("Ø-Tempo", detail?.averagePaceSecondsPerKm?.let { "${formatRunPace(it)} min/km" })
                 RunMetricRow("Geschwindigkeit", detail?.averageSpeedKmh?.let { "%.1f km/h".format(Locale.GERMAN, it) })
