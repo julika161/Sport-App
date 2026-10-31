@@ -4,14 +4,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
-import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -62,28 +60,28 @@ private fun fetchBody(apiKey: String): GarminHealthSnapshot {
     val today = LocalDate.now().toString()
     val errors = mutableMapOf<String, String>()
 
-    val hrv = check(errors, "HRV") {
+    val hrv = safeFetch(errors, "HRV") {
         JSONObject(garminGet(token, "/hrv-service/hrv/$today")).optJSONObject("hrvSummary")
     }
-    val heart = check(errors, "Herzfrequenz") {
+    val heart = safeFetch(errors, "Herzfrequenz") {
         JSONObject(garminGet(token, "/wellness-service/wellness/dailyHeartRate?date=$today"))
     }
-    val sleep = check(errors, "Schlaf") {
+    val sleep = safeFetch(errors, "Schlaf") {
         parseGarminJson(garminGet(token, "/sleep-service/sleep/dailySleep?date=$today"))
     }
-    val battery = check(errors, "Body Battery") {
+    val battery = safeFetch(errors, "Body Battery") {
         JSONArray(garminGet(token, "/wellness-service/wellness/bodyBattery/reports/daily?startDate=$today&endDate=$today"))
     }
-    val stress = check(errors, "Stress") {
+    val stress = safeFetch(errors, "Stress") {
         parseGarminJson(garminGet(token, "/usersummary-service/stats/stress/daily/$today/$today"))
     }
-    val summaries = check(errors, "Schritte") {
+    val summaries = safeFetch(errors, "Schritte") {
         parseGarminJson(garminGet(token, "/usersummary-service/v2/dailysummaries?startDate=$today&endDate=$today"))
     }
-    val spo2 = check(errors, "SpO₂") {
+    val spo2 = safeFetch(errors, "SpO₂") {
         JSONObject(garminGet(token, "/wellness-service/wellness/daily/spo2acclimation/$today"))
     }
-    val fitness = check(errors, "Fitnessalter") {
+    val fitness = safeFetch(errors, "Fitnessalter") {
         JSONObject(garminGet(token, "/fitnessage-service/fitnessage/v2/$today"))
     }
 
@@ -156,7 +154,7 @@ private fun garminGet(token: String, path: String): String {
     }
 }
 
-private fun <T> check(errors: MutableMap<String, String>, label: String, block: () -> T?): T? =
+private fun <T> safeFetch(errors: MutableMap<String, String>, label: String, block: () -> T?): T? =
     try {
         block()
     } catch (e: Exception) {
@@ -179,30 +177,31 @@ private fun findSleepObject(value: Any): JSONObject? = when (value) {
     else -> null
 }
 
-private fun findIntRec(value: Any?, vararg keys: String): Int? = when (value) {
-    is JSONObject -> {
-        keys.forEach { key ->
-            if (value.has(key) && !value.isNull(key)) {
-                val found = value.optDouble(key, Double.NaN)
-                if (found.isFinite()) return found.roundToInt()
+private fun findIntRec(value: Any?, vararg keys: String): Int? {
+    return when (value) {
+        is JSONObject -> {
+            keys.forEach { key ->
+                if (value.has(key) && !value.isNull(key)) {
+                    val found = value.optDouble(key, Double.NaN)
+                    if (found.isFinite()) return found.roundToInt()
+                }
             }
+            val names = value.keys()
+            while (names.hasNext()) {
+                val found = findIntRec(value.opt(names.next()), *keys)
+                if (found != null) return found
+            }
+            null
         }
-        val names = value.keys()
-        while (names.hasNext()) {
-            val child = value.opt(names.next())
-            val found = findIntRec(child, *keys)
-            if (found != null) return found
+        is JSONArray -> {
+            for (index in 0 until value.length()) {
+                val found = findIntRec(value.opt(index), *keys)
+                if (found != null) return found
+            }
+            null
         }
-        null
+        else -> null
     }
-    is JSONArray -> {
-        for (index in 0 until value.length()) {
-            val found = findIntRec(value.opt(index), *keys)
-            if (found != null) return found
-        }
-        null
-    }
-    else -> null
 }
 
 private fun hrvStatusText(raw: String): String = when (raw.uppercase()) {
@@ -250,7 +249,6 @@ fun BodyContent(modifier: Modifier = Modifier) {
     var status by remember { mutableStateOf("") }
     var zoneStatus by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
-    var showMore by remember { mutableStateOf(false) }
     var refreshKey by remember { mutableStateOf(0) }
 
     LaunchedEffect(apiKey, refreshKey) {
@@ -315,7 +313,7 @@ fun BodyContent(modifier: Modifier = Modifier) {
                 HealthMetricTile(
                     label = "Schlaf",
                     value = data.sleepSeconds?.let(::formatSleepDuration) ?: "—",
-                    detail = data.sleepScore?.let { "Score $it/100${data.sleepQuality?.let { q -> " · $q" } ?: ""}" } ?: "Letzte Nacht",
+                    detail = data.sleepScore?.let { "Score $it/100${data.sleepQuality?.let { quality -> " · $quality" } ?: ""}" } ?: "Letzte Nacht",
                     icon = Icons.Filled.Bedtime,
                     modifier = Modifier.weight(1f)
                 )
@@ -368,8 +366,11 @@ fun BodyContent(modifier: Modifier = Modifier) {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
                     HealthValueRow("Stress · Garmin-Tageswert", data.stressAverage?.let { "$it/100" })
-                    HealthValueRow("Schritte", data.steps?.let { "% ,d".format(Locale.GERMAN, it) })
-                    HealthValueRow("Tagespuls min.–max.", if (data.minHeartRate != null && data.maxHeartRate != null) "${data.minHeartRate}–${data.maxHeartRate} bpm" else null)
+                    HealthValueRow("Schritte", data.steps?.toString())
+                    HealthValueRow(
+                        "Tagespuls min.–max.",
+                        if (data.minHeartRate != null && data.maxHeartRate != null) "${data.minHeartRate}–${data.maxHeartRate} bpm" else null
+                    )
                     HealthValueRow("SpO₂ · Durchschnitt", data.averageSpO2?.let { "$it %" })
                     HealthValueRow("SpO₂ · niedrigster Wert", data.lowestSpO2?.let { "$it %" })
                     HealthValueRow("Fitnessalter", data.fitnessAge?.let { "$it Jahre" })
@@ -516,29 +517,31 @@ private fun findSleepObject(value: Any): JSONObject? = when (value) {
     else -> null
 }
 
-private fun findIntRec(value: Any?, vararg keys: String): Int? = when (value) {
-    is JSONObject -> {
-        keys.forEach { key ->
-            if (value.has(key) && !value.isNull(key)) {
-                val found = value.optDouble(key, Double.NaN)
-                if (found.isFinite()) return found.roundToInt()
+private fun findIntRec(value: Any?, vararg keys: String): Int? {
+    return when (value) {
+        is JSONObject -> {
+            keys.forEach { key ->
+                if (value.has(key) && !value.isNull(key)) {
+                    val found = value.optDouble(key, Double.NaN)
+                    if (found.isFinite()) return found.roundToInt()
+                }
             }
+            val names = value.keys()
+            while (names.hasNext()) {
+                val found = findIntRec(value.opt(names.next()), *keys)
+                if (found != null) return found
+            }
+            null
         }
-        val names = value.keys()
-        while (names.hasNext()) {
-            val found = findIntRec(value.opt(names.next()), *keys)
-            if (found != null) return found
+        is JSONArray -> {
+            for (index in 0 until value.length()) {
+                val found = findIntRec(value.opt(index), *keys)
+                if (found != null) return found
+            }
+            null
         }
-        null
+        else -> null
     }
-    is JSONArray -> {
-        for (index in 0 until value.length()) {
-            val found = findIntRec(value.opt(index), *keys)
-            if (found != null) return found
-        }
-        null
-    }
-    else -> null
 }
 
 private fun JSONObject.intOrNull(key: String): Int? =
