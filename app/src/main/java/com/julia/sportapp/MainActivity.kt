@@ -35,7 +35,8 @@ class MainActivity : ComponentActivity() {
 
 // Die Bereiche der App (unten in der Leiste, nur als Symbol)
 enum class Screen(val label: String, val symbol: String) {
-    Start("Start", "🎯"),
+    Start("Ziele", "🎯"),
+    Laufcoach("Laufcoach", "🏃"),
     Koerper("Gesundheit", "🫀"),
     Kalender("Kalender", "📅"),
     Auswertung("Auswertung", "📊"),
@@ -63,6 +64,7 @@ fun SportAppScreen() {
     ) { innerPadding ->
         when (current) {
             Screen.Start -> StartContent(db, Modifier.padding(innerPadding))
+            Screen.Laufcoach -> RunningCoachContent(db, Modifier.padding(innerPadding))
             Screen.Koerper -> BodyContent(Modifier.padding(innerPadding))
             Screen.Kalender -> CalendarContent(db, Modifier.padding(innerPadding))
             Screen.Auswertung -> StatsContent(db, Modifier.padding(innerPadding))
@@ -71,7 +73,7 @@ fun SportAppScreen() {
     }
 }
 
-// Startbildschirm: nur das Wochenziel
+// Ziele-Startseite
 @Composable
 fun StartContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
     val entries = remember { db.getAll() }
