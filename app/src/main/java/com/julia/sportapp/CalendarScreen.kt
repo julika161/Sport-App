@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -11,6 +12,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -21,11 +24,14 @@ import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-// Der Kalender: Monatsansicht mit Sportsymbolen, darunter die Einheiten des gewählten Tages
+// Monatsansicht mit Markierungen für absolvierte und geplante Einheiten.
 @Composable
 fun CalendarContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
-    val activities = remember { db.getAll() }
+    val context = LocalContext.current
+    val activities = remember(db) { db.getAll() }
     val byDate = activities.groupBy { it.date }
+    val coachSessions = remember { loadCoachSchedule(context) }
+    val coachByDate = coachSessions.filter { it.date != null }.groupBy { it.date!! }
 
     var month by remember { mutableStateOf(YearMonth.now()) }
     var selectedDate by remember { mutableStateOf<LocalDate?>(LocalDate.now()) }
@@ -34,40 +40,30 @@ fun CalendarContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
     val monthTitle = month.format(DateTimeFormatter.ofPattern("MMMM yyyy", Locale.GERMAN))
     val weekdays = listOf("Mo", "Di", "Mi", "Do", "Fr", "Sa", "So")
 
-    // Leere Felder vor dem 1. des Monats, damit die Wochentage stimmen
+    // Leere Felder vor dem Monatsersten halten die Wochentage korrekt ausgerichtet.
     val offset = month.atDay(1).dayOfWeek.value - 1
     val days: List<LocalDate?> = List<LocalDate?>(offset) { null } +
-            (1..month.lengthOfMonth()).map { month.atDay(it) }
+        (1..month.lengthOfMonth()).map { month.atDay(it) }
     val weeks: List<List<LocalDate?>> = days.chunked(7).map { week ->
         week + List<LocalDate?>(7 - week.size) { null }
     }
 
     Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
+        modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // Seitentitel: 28 sp, fett (einheitlich auf allen Seiten)
         Text("Kalender", fontSize = 28.sp, fontWeight = FontWeight.Bold)
 
-        // Monat wechseln
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
             modifier = Modifier.fillMaxWidth()
         ) {
-            OutlinedButton(onClick = { month = month.minusMonths(1) }) {
-                Text("‹", fontSize = 16.sp)
-            }
+            OutlinedButton(onClick = { month = month.minusMonths(1) }) { Text("‹", fontSize = 16.sp) }
             Text(monthTitle, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-            OutlinedButton(onClick = { month = month.plusMonths(1) }) {
-                Text("›", fontSize = 16.sp)
-            }
+            OutlinedButton(onClick = { month = month.plusMonths(1) }) { Text("›", fontSize = 16.sp) }
         }
 
-        // Wochentage
         Row(modifier = Modifier.fillMaxWidth()) {
             weekdays.forEach { day ->
                 Text(
@@ -80,60 +76,82 @@ fun CalendarContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
             }
         }
 
-        // Die Tage des Monats
         weeks.forEach { week ->
             Row(modifier = Modifier.fillMaxWidth()) {
                 week.forEach { date ->
-                    val entriesOfDay = date?.let { byDate[it] }.orEmpty()
+                    val dayActivities = date?.let { byDate[it] }.orEmpty()
+                    val hasCoachPlan = date?.let { coachByDate[it].orEmpty().isNotEmpty() } ?: false
                     DayCell(
                         date = date,
                         isToday = date == today,
                         isSelected = date != null && date == selectedDate,
-                        symbols = entriesOfDay.map { it.type.symbol }.distinct().take(3).joinToString(""),
+                        hasActivity = dayActivities.isNotEmpty(),
+                        hasCoachPlan = hasCoachPlan,
                         onClick = { selectedDate = date }
                     )
                 }
             }
         }
 
-        // Details zum gewählten Tag
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(18.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            CalendarLegendItem(MaterialTheme.colorScheme.secondary, "Absolviert")
+            CalendarLegendItem(MaterialTheme.colorScheme.tertiary, "Coach-Plan")
+        }
+
+        if (coachSessions.isEmpty()) {
+            Text(
+                "Noch keine Coach-Termine geplant. Wähle Trainingstage im Laufcoach und tippe auf „Ziel speichern“.",
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
         val chosen = selectedDate
         if (chosen != null) {
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "Einheiten am ${chosen.format(dateFormatter)}",
-                fontSize = 20.sp,
-                fontWeight = FontWeight.SemiBold
-            )
-            val dayEntries = byDate[chosen].orEmpty().sortedBy { it.time }
-            if (dayEntries.isEmpty()) {
-                Text("Keine Einheit an diesem Tag.", fontSize = 16.sp)
-            } else {
-                dayEntries.forEach { ActivityRow(it) }
+            Spacer(Modifier.height(4.dp))
+            Text("Tagesdetails · ${chosen.format(dateFormatter)}", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+
+            val planned = coachByDate[chosen].orEmpty()
+            if (planned.isNotEmpty()) {
+                Text("Coach-Plan", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.tertiary)
+                planned.forEach { session -> CoachPlanCard(session) }
+            }
+
+            val dayActivities = byDate[chosen].orEmpty().sortedBy { it.time }
+            if (dayActivities.isNotEmpty()) {
+                Text("Absolvierte Einheiten", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                dayActivities.forEach { ActivityRow(it) }
+            }
+
+            if (planned.isEmpty() && dayActivities.isEmpty()) {
+                Text("Keine geplante oder absolvierte Einheit an diesem Tag.", fontSize = 16.sp)
             }
         }
     }
 }
 
-// Ein Tag im Kalender
 @Composable
 fun RowScope.DayCell(
     date: LocalDate?,
     isToday: Boolean,
     isSelected: Boolean,
-    symbols: String,
+    hasActivity: Boolean,
+    hasCoachPlan: Boolean,
     onClick: () -> Unit
 ) {
-    val background = when {
+    val cellBackground = when {
         isSelected -> MaterialTheme.colorScheme.primary
-        symbols.isNotEmpty() -> MaterialTheme.colorScheme.primaryContainer
+        hasCoachPlan -> MaterialTheme.colorScheme.tertiaryContainer
+        hasActivity -> MaterialTheme.colorScheme.secondaryContainer
         else -> MaterialTheme.colorScheme.surface
     }
-    val textColor = if (isSelected) {
-        MaterialTheme.colorScheme.onPrimary
-    } else {
-        MaterialTheme.colorScheme.onSurface
-    }
+    val textColor = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+    val markerColor = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.secondary
+    val coachMarkerColor = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.tertiary
 
     Column(
         modifier = Modifier
@@ -141,7 +159,7 @@ fun RowScope.DayCell(
             .padding(2.dp)
             .height(64.dp)
             .clip(RoundedCornerShape(8.dp))
-            .background(background)
+            .background(cellBackground)
             .clickable(enabled = date != null) { onClick() }
             .padding(vertical = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -153,12 +171,41 @@ fun RowScope.DayCell(
                 fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal,
                 color = textColor
             )
-            Text(
-                text = symbols,
-                fontSize = 14.sp,
-                maxLines = 1,
-                color = textColor
-            )
+            Row(
+                modifier = Modifier.padding(top = 5.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                if (hasActivity) MarkerDot(markerColor)
+                if (hasCoachPlan) MarkerDot(coachMarkerColor)
+            }
+        }
+    }
+}
+
+@Composable
+private fun MarkerDot(color: Color) {
+    Box(modifier = Modifier.size(7.dp).clip(CircleShape).background(color))
+}
+
+@Composable
+private fun CalendarLegendItem(color: Color, label: String) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        MarkerDot(color)
+        Text(label, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun CoachPlanCard(session: CoachPlannedSession) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            Text(session.title, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+            val activityLabel = if (session.isRunning) "Lauftraining" else "Erholung / Mobility"
+            Text("$activityLabel · ${session.durationMinutes} Min.", fontSize = 15.sp, fontWeight = FontWeight.Medium)
+            Text(session.description, fontSize = 14.sp, color = MaterialTheme.colorScheme.onTertiaryContainer)
         }
     }
 }
