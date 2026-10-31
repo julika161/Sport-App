@@ -60,28 +60,28 @@ private fun fetchBody(apiKey: String): GarminHealthSnapshot {
     val today = LocalDate.now().toString()
     val errors = mutableMapOf<String, String>()
 
-    val hrv = safeFetch(errors, "HRV") {
+    val hrv = safeFetchObject(errors, "HRV") {
         JSONObject(garminGet(token, "/hrv-service/hrv/$today")).optJSONObject("hrvSummary")
     }
-    val heart = safeFetch(errors, "Herzfrequenz") {
+    val heart = safeFetchObject(errors, "Herzfrequenz") {
         JSONObject(garminGet(token, "/wellness-service/wellness/dailyHeartRate?date=$today"))
     }
-    val sleep = safeFetch(errors, "Schlaf") {
+    val sleep = safeFetchJson(errors, "Schlaf") {
         parseGarminJson(garminGet(token, "/sleep-service/sleep/dailySleep?date=$today"))
     }
-    val battery = safeFetch(errors, "Body Battery") {
+    val battery = safeFetchArray(errors, "Body Battery") {
         JSONArray(garminGet(token, "/wellness-service/wellness/bodyBattery/reports/daily?startDate=$today&endDate=$today"))
     }
-    val stress = safeFetch(errors, "Stress") {
+    val stress = safeFetchJson(errors, "Stress") {
         parseGarminJson(garminGet(token, "/usersummary-service/stats/stress/daily/$today/$today"))
     }
-    val summaries = safeFetch(errors, "Schritte") {
+    val summaries = safeFetchJson(errors, "Schritte") {
         parseGarminJson(garminGet(token, "/usersummary-service/v2/dailysummaries?startDate=$today&endDate=$today"))
     }
-    val spo2 = safeFetch(errors, "SpO₂") {
+    val spo2 = safeFetchObject(errors, "SpO₂") {
         JSONObject(garminGet(token, "/wellness-service/wellness/daily/spo2acclimation/$today"))
     }
-    val fitness = safeFetch(errors, "Fitnessalter") {
+    val fitness = safeFetchObject(errors, "Fitnessalter") {
         JSONObject(garminGet(token, "/fitnessage-service/fitnessage/v2/$today"))
     }
 
@@ -154,13 +154,38 @@ private fun garminGet(token: String, path: String): String {
     }
 }
 
-private fun <T> safeFetch(errors: MutableMap<String, String>, label: String, block: () -> T?): T? =
-    try {
-        block()
-    } catch (e: Exception) {
-        errors[label] = e.message ?: "Wert konnte nicht geladen werden"
-        null
-    }
+private fun safeFetchObject(
+    errors: MutableMap<String, String>,
+    label: String,
+    block: () -> JSONObject?
+): JSONObject? = try {
+    block()
+} catch (e: Exception) {
+    errors[label] = e.message ?: "Wert konnte nicht geladen werden"
+    null
+}
+
+private fun safeFetchArray(
+    errors: MutableMap<String, String>,
+    label: String,
+    block: () -> JSONArray
+): JSONArray? = try {
+    block()
+} catch (e: Exception) {
+    errors[label] = e.message ?: "Wert konnte nicht geladen werden"
+    null
+}
+
+private fun safeFetchJson(
+    errors: MutableMap<String, String>,
+    label: String,
+    block: () -> Any?
+): Any? = try {
+    block()
+} catch (e: Exception) {
+    errors[label] = e.message ?: "Wert konnte nicht geladen werden"
+    null
+}
 
 private fun parseGarminJson(raw: String): Any? {
     val text = raw.trim()
