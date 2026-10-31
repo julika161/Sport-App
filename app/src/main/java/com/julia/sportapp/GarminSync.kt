@@ -80,7 +80,7 @@ private fun mapType(typeKey: String): ActivityType? = when (typeKey) {
     else -> null
 }
 
-// Liest die Einheiten der letzten 60 Tage. Die FIT-Datei wird hier nicht gespeichert.
+// Holt die Einheiten der letzten 60 Tage und bewahrt die Laufdauer in Sekunden auf.
 private fun fetchGarminActivities(apiKey: String): GarminActivityBatch {
     val token = httpRequest(
         "$GARMIN_BASE/personalapitoken-service/personal-api/personal-api-key/token",
@@ -103,7 +103,9 @@ private fun fetchGarminActivities(apiKey: String): GarminActivityBatch {
         val typeKey = item.optJSONObject("activityType")?.optString("typeKey") ?: continue
         val type = mapType(typeKey) ?: continue
         val startLocal = LocalDateTime.parse(item.getString("startTimeLocal").replace(' ', 'T'))
-        val minutes = (item.optDouble("duration", 0.0) / 60.0).roundToInt().coerceAtLeast(1)
+        val durationRaw = item.optDouble("duration", 0.0)
+        val durationSeconds = durationRaw.takeIf { it > 0.0 }?.roundToInt()
+        val minutes = durationSeconds?.let { (it / 60.0).roundToInt().coerceAtLeast(1) } ?: 1
         val meters = item.optDouble("distance", 0.0)
         mapped.add(
             Activity(
@@ -112,25 +114,32 @@ private fun fetchGarminActivities(apiKey: String): GarminActivityBatch {
                 time = startLocal.toLocalTime().truncatedTo(ChronoUnit.MINUTES),
                 durationMinutes = minutes,
                 distanceKm = if (meters > 0) meters / 1000.0 else null,
-                garminId = item.optLong("activityId").toString()
+                garminId = item.optLong("activityId").toString(),
+                durationSeconds = durationSeconds
             )
         )
     }
     return GarminActivityBatch(array.length(), mapped, token)
 }
 
-// Übernimmt neue Einheiten. Doppelte werden übersprungen.
+// Übernimmt neue Einheiten und aktualisiert vorhandene Garmin-Einträge mit exakten Sekunden.
 private fun importGarmin(db: ActivityDatabase, apiKey: String): String {
     val batch = fetchGarminActivities(apiKey)
     val known = db.getAll().toMutableList()
     var added = 0
+    var updated = 0
     for (activity in batch.activities) {
-        val isDuplicate = known.any { existing ->
-            (activity.garminId != null && existing.garminId == activity.garminId) ||
-                (existing.type == activity.type && existing.date == activity.date &&
-                    abs(existing.time.toSecondOfDay() - activity.time.toSecondOfDay()) <= 30 * 60)
+        val sameGarminId = known.firstOrNull { activity.garminId != null && it.garminId == activity.garminId }
+        if (sameGarminId != null) {
+            db.updateImportedActivity(activity)
+            updated++
+            continue
         }
-        if (!isDuplicate) {
+        val isDuplicateByTime = known.any { existing ->
+            existing.type == activity.type && existing.date == activity.date &&
+                abs(existing.time.toSecondOfDay() - activity.time.toSecondOfDay()) <= 30 * 60
+        }
+        if (!isDuplicateByTime) {
             db.insert(activity)
             known.add(activity)
             added++
@@ -139,15 +148,21 @@ private fun importGarmin(db: ActivityDatabase, apiKey: String): String {
 
     val details = syncRunDetails(db, batch.accessToken)
     val detailsMessage = buildString {
-        append("${details.saved} Laufdetails ergänzt")
-        if (details.failed > 0) append("; ${details.failed} FIT-Dateien waren nicht verfügbar")
-        append(".")
+        if (details.attempted == 0) {
+            append("Keine Läufe ohne gespeicherte FIT-Details gefunden.")
+        } else {
+            append("${details.saved} von ${details.attempted} FIT-Details lokal gespeichert.")
+            if (details.failed > 0) {
+                append(" ${details.failed} fehlgeschlagen.")
+                details.lastFailure?.let { append(" Grund: $it") }
+            }
+        }
     }
     return "Garmin: ${batch.fetchedCount} Einträge gelesen, ${batch.activities.size} passende Sportarten, " +
-        "$added neu übernommen. $detailsMessage"
+        "$added neu übernommen, $updated aktualisiert. $detailsMessage"
 }
 
-// Karte auf dem Startbildschirm: Schlüssel eintragen und synchronisieren.
+// Garmin verbinden und die Aktivitäts- sowie Laufdetails auf das Gerät laden.
 @Composable
 fun GarminSyncCard(db: ActivityDatabase, onImported: () -> Unit) {
     val context = LocalContext.current
@@ -181,7 +196,7 @@ fun GarminSyncCard(db: ActivityDatabase, onImported: () -> Unit) {
                 onClick = {
                     saveApiKey(context, apiKey)
                     busy = true
-                    status = "Synchronisiere Aktivitäten und Laufdetails …"
+                    status = "Synchronisiere Aktivitäten und FIT-Details …"
                     scope.launch {
                         val result = withContext(Dispatchers.IO) {
                             runCatching { importGarmin(db, apiKey) }
