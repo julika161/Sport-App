@@ -1,7 +1,9 @@
 package com.julia.sportapp
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -16,6 +18,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.julia.sportapp.data.ActivityDatabase
@@ -28,6 +31,11 @@ import java.util.Locale
 @Composable
 fun CalendarContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
     val context = LocalContext.current
+    val darkTheme = isSystemInDarkTheme()
+    val goalGreen = if (darkTheme) Color(0xFFA5D6A7) else Color(0xFF2E7D32)
+    val goalGreenContainer = if (darkTheme) Color(0xFF1B3A24) else Color(0xFFE8F5E9)
+    val onGoalGreenContainer = if (darkTheme) Color(0xFFE8F5E9) else Color(0xFF1B5E20)
+
     val activities = remember(db) { db.getAll() }
     val byDate = activities.groupBy { it.date }
     val coachSessions = remember { loadCoachSchedule(context) }
@@ -87,7 +95,7 @@ fun CalendarContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
                         date = date,
                         isToday = date == today,
                         isSelected = date != null && date == selectedDate,
-                        hasActivity = dayActivities.isNotEmpty(),
+                        activityCount = dayActivities.size,
                         hasCoachPlan = hasCoachPlan,
                         hasGoalDate = date != null && date == goalDate,
                         onClick = { selectedDate = date }
@@ -103,7 +111,7 @@ fun CalendarContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
         ) {
             CalendarLegendItem(MaterialTheme.colorScheme.secondary, "Absolviert")
             CalendarLegendItem(MaterialTheme.colorScheme.tertiary, "Coach-Plan")
-            CalendarLegendItem(MaterialTheme.colorScheme.primary, "Zieltermin")
+            CalendarLegendItem(goalGreen, "Zieltermin")
         }
 
         if (coachSessions.isEmpty()) {
@@ -122,14 +130,14 @@ fun CalendarContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
             if (chosen == goalDate) {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+                    colors = CardDefaults.cardColors(containerColor = goalGreenContainer)
                 ) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("Dein Zieltermin", fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                        Text("Dein Zieltermin", fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = onGoalGreenContainer)
                         Text(
                             goalSummary ?: "Dein gespeichertes Laufziel",
                             fontSize = 15.sp,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                            color = onGoalGreenContainer
                         )
                     }
                 }
@@ -159,22 +167,28 @@ fun RowScope.DayCell(
     date: LocalDate?,
     isToday: Boolean,
     isSelected: Boolean,
-    hasActivity: Boolean,
+    activityCount: Int,
     hasCoachPlan: Boolean,
     hasGoalDate: Boolean,
     onClick: () -> Unit
 ) {
+    val darkTheme = isSystemInDarkTheme()
+    val goalGreen = if (darkTheme) Color(0xFFA5D6A7) else Color(0xFF2E7D32)
+    val goalGreenContainer = if (darkTheme) Color(0xFF1B3A24) else Color(0xFFE8F5E9)
     val cellBackground = when {
+        hasGoalDate -> goalGreenContainer
         isSelected -> MaterialTheme.colorScheme.primary
-        hasGoalDate -> MaterialTheme.colorScheme.primaryContainer
         hasCoachPlan -> MaterialTheme.colorScheme.tertiaryContainer
-        hasActivity -> MaterialTheme.colorScheme.secondaryContainer
+        activityCount > 0 -> MaterialTheme.colorScheme.secondaryContainer
         else -> MaterialTheme.colorScheme.surface
     }
-    val textColor = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
-    val activityMarker = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.secondary
-    val coachMarker = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.tertiary
-    val goalMarker = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary
+    val selectedWithoutGoal = isSelected && !hasGoalDate
+    val textColor = if (selectedWithoutGoal) MaterialTheme.colorScheme.onPrimary
+        else if (hasGoalDate && darkTheme) Color(0xFFE8F5E9)
+        else if (hasGoalDate) Color(0xFF1B5E20)
+        else MaterialTheme.colorScheme.onSurface
+    val activityMarker = if (selectedWithoutGoal) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.secondary
+    val coachMarker = if (selectedWithoutGoal) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.tertiary
 
     Column(
         modifier = Modifier
@@ -183,6 +197,11 @@ fun RowScope.DayCell(
             .height(64.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(cellBackground)
+            .border(
+                width = if (isSelected) 2.dp else 0.dp,
+                color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent,
+                shape = RoundedCornerShape(8.dp)
+            )
             .clickable(enabled = date != null) { onClick() }
             .padding(vertical = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -196,19 +215,19 @@ fun RowScope.DayCell(
             )
             Row(
                 modifier = Modifier.padding(top = 5.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                horizontalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                if (hasActivity) MarkerDot(activityMarker)
+                repeat(activityCount) { MarkerDot(activityMarker, 5.dp) }
                 if (hasCoachPlan) MarkerDot(coachMarker)
-                if (hasGoalDate) MarkerDot(goalMarker)
+                if (hasGoalDate) MarkerDot(goalGreen)
             }
         }
     }
 }
 
 @Composable
-private fun MarkerDot(color: Color) {
-    Box(modifier = Modifier.size(7.dp).clip(CircleShape).background(color))
+private fun MarkerDot(color: Color, size: Dp = 7.dp) {
+    Box(modifier = Modifier.size(size).clip(CircleShape).background(color))
 }
 
 @Composable
