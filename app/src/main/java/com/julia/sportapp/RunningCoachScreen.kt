@@ -6,7 +6,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -21,7 +20,7 @@ import kotlin.math.roundToInt
 private const val COACH_PREFS = "running_coach_local"
 private val runDays = listOf("Mo", "Di", "Mi", "Do", "Fr", "Sa", "So")
 
-// Erste Coach-Seite: Ziel und Verfügbarkeit bleiben lokal auf dem Gerät.
+// Ziel und Verfügbarkeit bleiben lokal auf dem Gerät.
 @Composable
 fun RunningCoachContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
     val context = LocalContext.current
@@ -35,6 +34,9 @@ fun RunningCoachContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
         mutableStateOf(prefs.getStringSet("available_days", emptySet())?.toSet() ?: emptySet())
     }
     var savedMessage by remember { mutableStateOf("") }
+    var goalSaved by remember {
+        mutableStateOf(distanceText.isNotBlank() && timeText.isNotBlank())
+    }
 
     val recentRuns = remember(db) { db.getAll().filter { it.type == ActivityType.LAUFEN } }
     val distanceKm = distanceText.replace(',', '.').toDoubleOrNull()
@@ -55,7 +57,10 @@ fun RunningCoachContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
                 Text("1. Dein Laufziel", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
                 OutlinedTextField(
                     value = distanceText,
-                    onValueChange = { value -> distanceText = value.filter { it.isDigit() || it == '.' || it == ',' } },
+                    onValueChange = { value ->
+                        distanceText = value.filter { it.isDigit() || it == '.' || it == ',' }
+                        goalSaved = false
+                    },
                     label = { Text("Zieldistanz (km)") },
                     placeholder = { Text("z. B. 10") },
                     singleLine = true,
@@ -64,7 +69,10 @@ fun RunningCoachContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
                 )
                 OutlinedTextField(
                     value = timeText,
-                    onValueChange = { value -> timeText = value.filter { it.isDigit() || it == '.' || it == ',' } },
+                    onValueChange = { value ->
+                        timeText = value.filter { it.isDigit() || it == '.' || it == ',' }
+                        goalSaved = false
+                    },
                     label = { Text("Zielzeit (Minuten)") },
                     placeholder = { Text("z. B. 60") },
                     singleLine = true,
@@ -83,7 +91,10 @@ fun RunningCoachContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
                 }
                 OutlinedTextField(
                     value = targetDate,
-                    onValueChange = { targetDate = it.take(10) },
+                    onValueChange = {
+                        targetDate = it.take(10)
+                        goalSaved = false
+                    },
                     label = { Text("Wunschdatum (optional, TT.MM.JJJJ)") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
@@ -101,6 +112,7 @@ fun RunningCoachContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
                             selected = day in selectedDays,
                             onClick = {
                                 selectedDays = if (day in selectedDays) selectedDays - day else selectedDays + day
+                                goalSaved = false
                             },
                             label = { Text(day, fontSize = 13.sp) },
                             modifier = Modifier.weight(1f)
@@ -113,6 +125,7 @@ fun RunningCoachContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
                             selected = day in selectedDays,
                             onClick = {
                                 selectedDays = if (day in selectedDays) selectedDays - day else selectedDays + day
+                                goalSaved = false
                             },
                             label = { Text(day, fontSize = 13.sp) },
                             modifier = Modifier.weight(1f)
@@ -120,7 +133,7 @@ fun RunningCoachContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
                     }
                 }
                 if (selectedDays.isEmpty()) {
-                    Text("Noch keine Tage gewählt. Du kannst sie auch später festlegen.", fontSize = 14.sp)
+                    Text("Noch keine Tage gewählt. Die Vorschläge erhalten dann zunächst keinen festen Wochentag.", fontSize = 14.sp)
                 }
             }
         }
@@ -131,7 +144,10 @@ fun RunningCoachContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
                 Text("Zum Beispiel eine Trainings-Einschränkung. Bitte keine Notfalldaten eintragen.", fontSize = 14.sp)
                 OutlinedTextField(
                     value = constraints,
-                    onValueChange = { constraints = it.take(500) },
+                    onValueChange = {
+                        constraints = it.take(500)
+                        goalSaved = false
+                    },
                     placeholder = { Text("Nur wenn du möchtest") },
                     minLines = 2,
                     maxLines = 4,
@@ -150,7 +166,8 @@ fun RunningCoachContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
                     .putString("constraints", constraints)
                     .putStringSet("available_days", selectedDays)
                     .apply()
-                savedMessage = "Dein Ziel und deine Einstellungen wurden auf diesem Gerät gespeichert."
+                goalSaved = true
+                savedMessage = "Dein Ziel wurde gespeichert. Die Trainingsvorschläge findest du direkt darunter."
             },
             enabled = validGoal,
             modifier = Modifier.fillMaxWidth().height(54.dp)
@@ -159,14 +176,25 @@ fun RunningCoachContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
         }
         if (savedMessage.isNotEmpty()) Text(savedMessage, fontSize = 14.sp)
 
+        if (goalSaved && validGoal && pace != null) {
+            RunningRecommendations(
+                goalDistanceKm = distanceKm!!,
+                goalPaceMinutesPerKm = pace,
+                targetDateText = targetDate,
+                recentRuns = recentRuns,
+                availableDays = selectedDays,
+                hasLocalConstraints = constraints.isNotBlank()
+            )
+        }
+
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("Garmin-Daten für den Coach", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
                 Text("In der App sind derzeit ${recentRuns.size} Laufaktivitäten mit Datum, Dauer und Distanz gespeichert.", fontSize = 15.sp)
                 Text(
-                    "Im Reiter Läufe findest du bereits eine Liste mit den lokal ausgewerteten FIT-Kennzahlen. " +
-                        "Beim Synchronisieren ergänzt die App die Details für bis zu 15 neue Läufe; Herzfrequenzzonen " +
-                        "werden erst angezeigt, sobald sie mit deinen persönlichen Grenzwerten verlässlich berechnet werden können.",
+                    "Im Reiter Läufe wird das Ø-Tempo schon aus Distanz und Dauer berechnet. " +
+                        "Garmin-FIT-Zusatzwerte werden nach der Synchronisierung ergänzt; unter Einstellungen " +
+                        "zeigt der Status nun auch, wenn der Detailabruf fehlschlägt.",
                     fontSize = 14.sp
                 )
             }
