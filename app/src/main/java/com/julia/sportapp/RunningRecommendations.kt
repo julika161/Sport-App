@@ -17,10 +17,11 @@ import kotlin.math.roundToInt
 private data class SuggestedWorkout(
     val title: String,
     val durationMinutes: Int,
-    val description: String
+    val description: String,
+    val isRunning: Boolean = true
 )
 
-// Kleine, nachvollziehbare Vorschläge aus den lokalen Laufdaten; kein KI-Dienst wird verwendet.
+// Kleine, nachvollziehbare Vorschläge aus lokalen Laufdaten; kein KI-Dienst wird verwendet.
 @Composable
 fun RunningRecommendations(
     goalDistanceKm: Double,
@@ -28,7 +29,8 @@ fun RunningRecommendations(
     targetDateText: String,
     recentRuns: List<Activity>,
     availableDays: Set<String>,
-    hasLocalConstraints: Boolean
+    heartRateZones: List<HeartRateZone>,
+    zonesLoading: Boolean
 ) {
     val today = LocalDate.now()
     val recent = remember(recentRuns) {
@@ -38,24 +40,32 @@ fun RunningRecommendations(
     val averageMinutes = recent.map { run ->
         (run.durationSeconds?.toDouble()?.div(60.0) ?: run.durationMinutes.toDouble())
     }.average().takeIf { it.isFinite() }?.roundToInt()
-    val sessions = remember(recent) {
+    val referencePaceSeconds = recent.mapNotNull { run ->
+        val distance = run.distanceKm?.takeIf { it > 0.0 } ?: return@mapNotNull null
+        val duration = run.durationSeconds ?: run.durationMinutes * 60
+        if (duration <= 0) null else duration / distance
+    }.average().takeIf { it.isFinite() && it > 0.0 }?.roundToInt()
+    val referenceSpeedKmh = referencePaceSeconds?.let { 3600.0 / it }
+    val zoneTwo = heartRateZones.firstOrNull { it.number == 2 }
+
+    val sessions = remember(recent, averageMinutes) {
         if (recent.size >= 2 && averageMinutes != null) {
             val longestRecent = recent.maxOf { it.durationMinutes }
             listOf(
                 SuggestedWorkout(
                     "Locker laufen",
                     roundToFive((averageMinutes * 0.75).roundToInt()).coerceIn(15, 40),
-                    "Im Gesprächstempo bleiben. Das Zieltempo heute nicht erzwingen."
+                    "Bequem bleiben und das Zieltempo nicht erzwingen."
                 ),
                 SuggestedWorkout(
                     "Ruhiger Dauerlauf",
                     roundToFive(averageMinutes).coerceIn(20, 45),
-                    "Gleichmäßig und bequem laufen; bei Müdigkeit kürzer machen."
+                    "Gleichmäßig laufen; bei Müdigkeit kürzer machen."
                 ),
                 SuggestedWorkout(
                     "Etwas länger, weiterhin locker",
-                    (longestRecent + 5).coerceAtMost(60),
-                    "Nur wenn sich die vorherigen Läufe gut angefühlt haben; sonst die gewohnte Dauer wiederholen."
+                    (longestRecent + 5).coerceIn(15, 60),
+                    "Nur steigern, wenn sich die vorherigen Läufe gut angefühlt haben."
                 )
             )
         } else {
@@ -63,17 +73,18 @@ fun RunningRecommendations(
                 SuggestedWorkout(
                     "Locker starten",
                     20,
-                    "20 Min. Lauf-/Geh-Wechsel: 1 Min. sehr locker traben, 2 Min. gehen."
+                    "Lauf-/Geh-Wechsel: 1 Min. locker traben, 2 Min. gehen."
                 ),
                 SuggestedWorkout(
                     "Erholung & Bewegung",
                     15,
-                    "15 Min. Spaziergang oder sanfte Mobility. Ein Erholungstag gehört zum Training."
+                    "Spaziergang oder sanfte Mobility; ein Ruhetag ist auch Training.",
+                    isRunning = false
                 ),
                 SuggestedWorkout(
                     "Lauf-/Geh-Wechsel wiederholen",
                     20,
-                    "Nur wiederholen, wenn sich der erste Lauf gut angefühlt hat; sonst spazieren gehen."
+                    "Nur wiederholen, wenn sich der erste Lauf gut angefühlt hat."
                 )
             )
         }
@@ -98,7 +109,7 @@ fun RunningRecommendations(
             if (targetDateText.isNotBlank()) {
                 Text("Wunschdatum: $targetDateText", fontSize = 14.sp)
             }
-            Text("Deine nächsten Trainingsvorschläge", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+            Text("Deine nächsten Trainings", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
 
             sessions.forEachIndexed { index, workout ->
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -112,27 +123,50 @@ fun RunningRecommendations(
                         fontSize = 16.sp,
                         fontWeight = FontWeight.SemiBold
                     )
-                    Text("Etwa ${workout.durationMinutes} Minuten · ${workout.description}", fontSize = 14.sp)
+                    if (workout.isRunning) {
+                        val paceText = if (referencePaceSeconds != null && referenceSpeedKmh != null) {
+                            "${formatRecommendationPace(referencePaceSeconds / 60.0)} min/km · " +
+                                "${String.format(Locale.GERMAN, "%.1f", referenceSpeedKmh)} km/h"
+                        } else {
+                            "Noch kein persönlicher Pace-/km/h-Richtwert"
+                        }
+                        Text("${workout.durationMinutes} Min. · $paceText", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                        Text(
+                            when {
+                                zonesLoading -> "Pulsziel: Garmin-Laufzone wird geladen …"
+                                zoneTwo?.minBpm != null && zoneTwo.maxBpm != null ->
+                                    "Pulsziel: Garmin-Zone 2 · ${zoneTwo.minBpm}–${zoneTwo.maxBpm} bpm"
+                                else -> "Pulsziel: lockeres Gesprächstempo; kein bpm-Wert geraten."
+                            },
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    } else {
+                        Text("${workout.durationMinutes} Min. · ohne Pace- oder Pulsziel", fontSize = 14.sp)
+                    }
+                    Text(workout.description, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 if (index < sessions.lastIndex) HorizontalDivider()
             }
 
             Text(
-                if (recent.size >= 2) {
-                    "Vorschläge orientieren sich an deinen Läufen der letzten 4 Wochen."
-                } else {
-                    "Da nur wenige Läufe der letzten 4 Wochen vorliegen, startet der Vorschlag bewusst sanft."
+                when {
+                    recent.size < 2 -> "Wenig aktuelle Laufdaten: Der Einstieg bleibt bewusst sanft."
+                    referencePaceSeconds != null -> "Pace/km/h sind der Durchschnitt deiner letzten Läufe – ein Richtwert, kein Muss."
+                    else -> "Für einen Pace-Richtwert fehlen Distanz oder Dauer bei den letzten Läufen."
                 },
                 fontSize = 13.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            if (zoneTwo == null && !zonesLoading) {
+                Text(
+                    "Deine persönlichen Garmin-Zonen sind noch nicht verfügbar. Verbinde Garmin unter Einstellungen; bis dahin gilt das Gesprächstempo.",
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             Text(
-                "Das Zieltempo ist ein Zielwert, nicht das Tempo für jede Einheit. " +
-                    if (hasLocalConstraints) {
-                        "Deine lokalen Hinweise werden nicht automatisch medizinisch bewertet; passe die Vorschläge daran an."
-                    } else {
-                        "Passe die Vorschläge an dein Wohlbefinden an und pausiere bei Schmerzen."
-                    },
+                "Wenn du Schmerzen oder ungewöhnliche Beschwerden hast, pausiere.",
                 fontSize = 13.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
