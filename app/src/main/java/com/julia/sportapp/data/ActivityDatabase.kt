@@ -2,15 +2,17 @@ package com.julia.sportapp.data
 
 import android.content.ContentValues
 import android.content.Context
+import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import org.json.JSONArray
+import org.json.JSONObject
 import java.time.LocalDate
 import java.time.LocalTime
 
-// Speichert die Einheiten dauerhaft auf dem Handy
-class ActivityDatabase(context: Context) : SQLiteOpenHelper(context, "sportapp.db", null, 2) {
+// Speichert Trainings und ausgewählte Laufwerte dauerhaft und nur lokal auf dem Handy.
+class ActivityDatabase(context: Context) : SQLiteOpenHelper(context, "sportapp.db", null, 3) {
 
-    // Wird beim ersten Start einmal ausgeführt: Tabelle anlegen
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
             """CREATE TABLE activities (
@@ -23,16 +25,35 @@ class ActivityDatabase(context: Context) : SQLiteOpenHelper(context, "sportapp.d
                 garminId TEXT
             )"""
         )
+        createRunDetailsTable(db)
     }
 
-    // Version 1 -> 2: nur eine Spalte ergänzen, bestehende Einträge bleiben erhalten
+    // Bestehende Trainings bleiben bei einer App-Aktualisierung erhalten.
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) {
             db.execSQL("ALTER TABLE activities ADD COLUMN garminId TEXT")
         }
+        if (oldVersion < 3) {
+            createRunDetailsTable(db)
+        }
     }
 
-    // Eine Einheit speichern (wird nur vom Garmin-Import genutzt)
+    private fun createRunDetailsTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS run_details (
+                garminId TEXT PRIMARY KEY NOT NULL,
+                durationSeconds INTEGER,
+                averagePaceSecondsPerKm INTEGER,
+                averageSpeedKmh REAL,
+                averageHeartRate INTEGER,
+                maximumHeartRate INTEGER,
+                ascentMeters INTEGER,
+                averageCadenceSpm INTEGER,
+                lapsJson TEXT NOT NULL DEFAULT '[]'
+            )"""
+        )
+    }
+
     fun insert(activity: Activity) {
         val values = ContentValues().apply {
             put("type", activity.type.name)
@@ -45,7 +66,6 @@ class ActivityDatabase(context: Context) : SQLiteOpenHelper(context, "sportapp.d
         writableDatabase.insert("activities", null, values)
     }
 
-    // Alle Einheiten laden, neueste zuerst
     fun getAll(): List<Activity> {
         val result = mutableListOf<Activity>()
         readableDatabase.rawQuery(
@@ -68,8 +88,104 @@ class ActivityDatabase(context: Context) : SQLiteOpenHelper(context, "sportapp.d
         return result
     }
 
-    // Alle Einheiten löschen
+    // FIT-Dateien werden verworfen; in der Datenbank bleiben nur Kennzahlen und Runden.
+    fun saveRunDetail(detail: RunDetail) {
+        val laps = JSONArray()
+        detail.laps.forEach { lap ->
+            laps.put(
+                JSONObject()
+                    .put("number", lap.number)
+                    .putNullable("distanceMeters", lap.distanceMeters)
+                    .putNullable("durationSeconds", lap.durationSeconds)
+                    .putNullable("averagePaceSecondsPerKm", lap.averagePaceSecondsPerKm)
+                    .putNullable("averageHeartRate", lap.averageHeartRate)
+                    .putNullable("ascentMeters", lap.ascentMeters)
+            )
+        }
+        val values = ContentValues().apply {
+            put("garminId", detail.garminId)
+            put("durationSeconds", detail.durationSeconds)
+            put("averagePaceSecondsPerKm", detail.averagePaceSecondsPerKm)
+            put("averageSpeedKmh", detail.averageSpeedKmh)
+            put("averageHeartRate", detail.averageHeartRate)
+            put("maximumHeartRate", detail.maximumHeartRate)
+            put("ascentMeters", detail.ascentMeters)
+            put("averageCadenceSpm", detail.averageCadenceSpm)
+            put("lapsJson", laps.toString())
+        }
+        writableDatabase.insertWithOnConflict(
+            "run_details", null, values, SQLiteDatabase.CONFLICT_REPLACE
+        )
+    }
+
+    fun getRunDetail(garminId: String): RunDetail? = readableDatabase.rawQuery(
+        "SELECT * FROM run_details WHERE garminId = ? LIMIT 1",
+        arrayOf(garminId)
+    ).use { cursor -> if (cursor.moveToFirst()) cursor.toRunDetail() else null }
+
+    fun getAllRunDetails(): Map<String, RunDetail> {
+        val result = mutableMapOf<String, RunDetail>()
+        readableDatabase.rawQuery("SELECT * FROM run_details", null).use { cursor ->
+            while (cursor.moveToNext()) {
+                val detail = cursor.toRunDetail()
+                result[detail.garminId] = detail
+            }
+        }
+        return result
+    }
+
     fun deleteAll() {
+        writableDatabase.delete("run_details", null, null)
         writableDatabase.delete("activities", null, null)
     }
+
+    private fun Cursor.toRunDetail(): RunDetail {
+        val laps = runCatching { JSONArray(getString(getColumnIndexOrThrow("lapsJson"))) }
+            .getOrElse { JSONArray() }
+        val parsedLaps = buildList {
+            for (i in 0 until laps.length()) {
+                val item = laps.optJSONObject(i) ?: continue
+                add(
+                    RunLap(
+                        number = item.optInt("number", i + 1),
+                        distanceMeters = item.doubleOrNull("distanceMeters"),
+                        durationSeconds = item.intOrNull("durationSeconds"),
+                        averagePaceSecondsPerKm = item.intOrNull("averagePaceSecondsPerKm"),
+                        averageHeartRate = item.intOrNull("averageHeartRate"),
+                        ascentMeters = item.intOrNull("ascentMeters")
+                    )
+                )
+            }
+        }
+        return RunDetail(
+            garminId = getString(getColumnIndexOrThrow("garminId")),
+            durationSeconds = intOrNull("durationSeconds"),
+            averagePaceSecondsPerKm = intOrNull("averagePaceSecondsPerKm"),
+            averageSpeedKmh = doubleOrNull("averageSpeedKmh"),
+            averageHeartRate = intOrNull("averageHeartRate"),
+            maximumHeartRate = intOrNull("maximumHeartRate"),
+            ascentMeters = intOrNull("ascentMeters"),
+            averageCadenceSpm = intOrNull("averageCadenceSpm"),
+            laps = parsedLaps
+        )
+    }
+
+    private fun Cursor.intOrNull(column: String): Int? {
+        val index = getColumnIndexOrThrow(column)
+        return if (isNull(index)) null else getInt(index)
+    }
+
+    private fun Cursor.doubleOrNull(column: String): Double? {
+        val index = getColumnIndexOrThrow(column)
+        return if (isNull(index)) null else getDouble(index)
+    }
+
+    private fun JSONObject.intOrNull(key: String): Int? =
+        if (!has(key) || isNull(key)) null else optInt(key)
+
+    private fun JSONObject.doubleOrNull(key: String): Double? =
+        if (!has(key) || isNull(key)) null else optDouble(key)
+
+    private fun JSONObject.putNullable(key: String, value: Any?): JSONObject =
+        put(key, value ?: JSONObject.NULL)
 }
