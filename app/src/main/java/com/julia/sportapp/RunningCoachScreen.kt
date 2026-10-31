@@ -38,7 +38,7 @@ fun RunningCoachContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
 
     val recentRuns = remember(db) { db.getAll().filter { it.type == ActivityType.LAUFEN } }
     val distanceKm = distanceText.replace(',', '.').toDoubleOrNull()
-    val targetMinutes = timeText.toDoubleOrNull()
+    val targetMinutes = timeText.replace(',', '.').toDoubleOrNull()
     val validGoal = distanceKm != null && distanceKm > 0.0 && targetMinutes != null && targetMinutes > 0.0
     val pace = if (validGoal) targetMinutes!! / distanceKm!! else null
     val speed = if (validGoal) distanceKm!! / (targetMinutes!! / 60.0) else null
@@ -164,9 +164,9 @@ fun RunningCoachContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
                 Text("Garmin-Daten für den Coach", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
                 Text("In der App sind derzeit ${recentRuns.size} Laufaktivitäten mit Datum, Dauer und Distanz gespeichert.", fontSize = 15.sp)
                 Text(
-                    "Als Nächstes ergänze ich den Abruf der Garmin-Aktivitätsdetails und FIT-Dateien, " +
-                        "deiner Herzfrequenzzonen sowie ausgewählter Erholungswerte. Erst danach erstellt der Coach " +
-                        "einen Plan aus deinen tatsächlichen Daten.",
+                    "Im Reiter Läufe findest du bereits eine Liste mit den lokal ausgewerteten FIT-Kennzahlen. " +
+                        "Beim Synchronisieren ergänzt die App die Details für bis zu 15 neue Läufe; Herzfrequenzzonen " +
+                        "werden erst angezeigt, sobald sie mit deinen persönlichen Grenzwerten verlässlich berechnet werden können.",
                     fontSize = 14.sp
                 )
             }
