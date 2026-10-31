@@ -14,6 +14,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.julia.sportapp.data.ActivityDatabase
 import com.julia.sportapp.data.ActivityType
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -25,11 +27,11 @@ private val runDays = listOf("Mo", "Di", "Mi", "Do", "Fr", "Sa", "So")
 fun RunningCoachContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences(COACH_PREFS, android.content.Context.MODE_PRIVATE) }
+    val apiKey = remember { loadApiKey(context) }
 
     var distanceText by remember { mutableStateOf(prefs.getString("goal_distance_km", "") ?: "") }
     var timeText by remember { mutableStateOf(prefs.getString("goal_time_minutes", "") ?: "") }
     var targetDate by remember { mutableStateOf(prefs.getString("target_date", "") ?: "") }
-    var constraints by remember { mutableStateOf(prefs.getString("constraints", "") ?: "") }
     var selectedDays by remember {
         mutableStateOf(prefs.getStringSet("available_days", emptySet())?.toSet() ?: emptySet())
     }
@@ -37,6 +39,9 @@ fun RunningCoachContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
     var goalSaved by remember {
         mutableStateOf(distanceText.isNotBlank() && timeText.isNotBlank())
     }
+    var heartRateZones by remember { mutableStateOf<List<HeartRateZone>>(emptyList()) }
+    var zonesLoading by remember { mutableStateOf(false) }
+    var zonesMessage by remember { mutableStateOf("") }
 
     val recentRuns = remember(db) { db.getAll().filter { it.type == ActivityType.LAUFEN } }
     val distanceKm = distanceText.replace(',', '.').toDoubleOrNull()
@@ -45,16 +50,40 @@ fun RunningCoachContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
     val pace = if (validGoal) targetMinutes!! / distanceKm!! else null
     val speed = if (validGoal) distanceKm!! / (targetMinutes!! / 60.0) else null
 
+    LaunchedEffect(apiKey) {
+        if (apiKey.isBlank()) {
+            heartRateZones = emptyList()
+            zonesMessage = "Garmin nicht verbunden. Verbinde Garmin unter Einstellungen, um deine persönlichen Laufzonen zu laden."
+        } else {
+            zonesLoading = true
+            zonesMessage = ""
+            val result = withContext(Dispatchers.IO) {
+                runCatching { fetchRunningHeartRateZones(apiKey) }
+            }
+            zonesLoading = false
+            result.fold(
+                onSuccess = { zones ->
+                    heartRateZones = zones
+                    zonesMessage = if (zones.size == 5) "" else "Garmin hat keine fünf auslesbaren Laufzonen geliefert. Prüfe deine Laufzonen in Garmin Connect."
+                },
+                onFailure = {
+                    heartRateZones = emptyList()
+                    zonesMessage = "Garmin-Laufzonen konnten nicht geladen werden. Prüfe Verbindung und Garmin-Zugang unter Einstellungen."
+                }
+            )
+        }
+    }
+
     Column(
         modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text("Laufcoach", fontSize = 28.sp, fontWeight = FontWeight.Bold)
-        Text("Dein Ziel, dein Rhythmus, dein nächster Schritt.", fontSize = 16.sp)
+        Text("Ziel, Tempo und nächste Einheit.", fontSize = 16.sp)
 
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("1. Dein Laufziel", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+                Text("Dein Laufziel", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
                 OutlinedTextField(
                     value = distanceText,
                     onValueChange = { value ->
@@ -81,13 +110,12 @@ fun RunningCoachContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
                 )
                 if (pace != null && speed != null) {
                     Text(
-                        "Daraus ergibt sich ein Zieltempo von ${formatCoachPace(pace)} min/km " +
-                            "und etwa ${String.format(Locale.GERMAN, "%.1f", speed)} km/h.",
+                        "Zieltempo ${formatCoachPace(pace)} min/km · ${String.format(Locale.GERMAN, "%.1f", speed)} km/h",
                         fontSize = 15.sp,
                         color = MaterialTheme.colorScheme.primary
                     )
                 } else {
-                    Text("Trage Distanz und Zielzeit ein. Tempo und Geschwindigkeit berechnet die App.", fontSize = 14.sp)
+                    Text("Distanz und Zielzeit eintragen; Tempo und km/h werden berechnet.", fontSize = 14.sp)
                 }
                 OutlinedTextField(
                     value = targetDate,
@@ -104,8 +132,7 @@ fun RunningCoachContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
 
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("2. Deine verfügbaren Lauftage", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-                Text("Wähle die Tage, an denen ein Lauf grundsätzlich möglich ist.", fontSize = 14.sp)
+                Text("Mögliche Lauftage", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
                     runDays.take(4).forEach { day ->
                         FilterChip(
@@ -133,27 +160,8 @@ fun RunningCoachContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
                     }
                 }
                 if (selectedDays.isEmpty()) {
-                    Text("Noch keine Tage gewählt. Die Vorschläge erhalten dann zunächst keinen festen Wochentag.", fontSize = 14.sp)
+                    Text("Ohne Auswahl werden die Vorschläge nicht an feste Wochentage gebunden.", fontSize = 14.sp)
                 }
-            }
-        }
-
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("3. Hinweise für den Coach (optional)", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-                Text("Zum Beispiel eine Trainings-Einschränkung. Bitte keine Notfalldaten eintragen.", fontSize = 14.sp)
-                OutlinedTextField(
-                    value = constraints,
-                    onValueChange = {
-                        constraints = it.take(500)
-                        goalSaved = false
-                    },
-                    placeholder = { Text("Nur wenn du möchtest") },
-                    minLines = 2,
-                    maxLines = 4,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Text("Diese Angaben bleiben lokal auf dem Gerät und werden nicht an einen KI-Dienst gesendet.", fontSize = 13.sp)
             }
         }
 
@@ -163,16 +171,16 @@ fun RunningCoachContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
                     .putString("goal_distance_km", distanceText)
                     .putString("goal_time_minutes", timeText)
                     .putString("target_date", targetDate)
-                    .putString("constraints", constraints)
                     .putStringSet("available_days", selectedDays)
+                    .remove("constraints")
                     .apply()
                 goalSaved = true
-                savedMessage = "Dein Ziel wurde gespeichert. Die Trainingsvorschläge findest du direkt darunter."
+                savedMessage = "Ziel gespeichert · Trainingsvorschläge direkt darunter."
             },
             enabled = validGoal,
             modifier = Modifier.fillMaxWidth().height(54.dp)
         ) {
-            Text("Ziel lokal speichern", fontSize = 16.sp)
+            Text("Ziel speichern", fontSize = 16.sp)
         }
         if (savedMessage.isNotEmpty()) Text(savedMessage, fontSize = 14.sp)
 
@@ -183,20 +191,11 @@ fun RunningCoachContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
                 targetDateText = targetDate,
                 recentRuns = recentRuns,
                 availableDays = selectedDays,
-                hasLocalConstraints = constraints.isNotBlank()
+                heartRateZones = heartRateZones,
+                zonesLoading = zonesLoading
             )
-        }
-
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("Garmin-Daten für den Coach", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-                Text("In der App sind derzeit ${recentRuns.size} Laufaktivitäten mit Datum, Dauer und Distanz gespeichert.", fontSize = 15.sp)
-                Text(
-                    "Im Reiter Läufe wird das Ø-Tempo schon aus Distanz und Dauer berechnet. " +
-                        "Garmin-FIT-Zusatzwerte werden nach der Synchronisierung ergänzt; unter Einstellungen " +
-                        "zeigt der Status nun auch, wenn der Detailabruf fehlschlägt.",
-                    fontSize = 14.sp
-                )
+            if (!zonesLoading && zonesMessage.isNotBlank()) {
+                Text(zonesMessage, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
