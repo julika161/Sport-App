@@ -50,7 +50,8 @@ fun RunningCoachContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
     val pace = if (validGoal) targetMinutes!! / distanceKm!! else null
     val speed = if (validGoal) distanceKm!! / (targetMinutes!! / 60.0) else null
 
-    LaunchedEffect(apiKey) {
+    LaunchedEffect(apiKey, goalSaved, validGoal) {
+        if (!goalSaved || !validGoal) return@LaunchedEffect
         if (apiKey.isBlank()) {
             heartRateZones = emptyList()
             zonesMessage = "Garmin nicht verbunden. Verbinde Garmin unter Einstellungen, um deine persönlichen Laufzonen zu laden."
@@ -66,9 +67,13 @@ fun RunningCoachContent(db: ActivityDatabase, modifier: Modifier = Modifier) {
                     heartRateZones = zones
                     zonesMessage = if (zones.size == 5) "" else "Garmin hat keine fünf auslesbaren Laufzonen geliefert. Prüfe deine Laufzonen in Garmin Connect."
                 },
-                onFailure = {
+                onFailure = { error ->
                     heartRateZones = emptyList()
-                    zonesMessage = "Garmin-Laufzonen konnten nicht geladen werden. Prüfe Verbindung und Garmin-Zugang unter Einstellungen."
+                    zonesMessage = if (error is GarminException) {
+                        error.message ?: "Garmin-Laufzonen konnten nicht geladen werden."
+                    } else {
+                        "Garmin-Laufzonen konnten nicht geladen werden. Prüfe Verbindung und Garmin-Zugang unter Einstellungen."
+                    }
                 }
             )
         }
