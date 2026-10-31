@@ -12,12 +12,14 @@ private const val ZONES_API = "https://personal.connectapi.garmin.com"
 data class HeartRateZone(
     val number: Int,
     val minBpm: Int?,
-    val maxBpm: Int?
+    val maxBpm: Int?,
+    val sport: String = "RUNNING"
 )
 
 private data class ZoneGroup(
     val sport: String,
-    val values: JSONArray,
+    val values: JSONArray?,
+    val floorProfile: JSONObject?,
     val maxHeartRate: Double?,
     val restingHeartRate: Double?,
     val trainingMethod: String?
@@ -41,14 +43,14 @@ fun fetchRunningHeartRateZones(apiKey: String): List<HeartRateZone> {
     val groups = mutableListOf<ZoneGroup>()
     collectZoneGroups(root, "", null, null, null, groups)
 
-    val runningGroups = groups.filter { it.sport.contains("RUN", ignoreCase = true) }
-    val selected = when {
-        runningGroups.isNotEmpty() -> runningGroups.first()
-        groups.count { it.sport.isBlank() } == 1 -> groups.first { it.sport.isBlank() }
-        else -> null
-    } ?: return emptyList()
+    val selected = groups.firstOrNull { it.sport.equals("RUNNING", ignoreCase = true) }
+        ?: groups.firstOrNull { it.sport.equals("DEFAULT", ignoreCase = true) }
+        ?: groups.singleOrNull { it.sport.isBlank() }
+        ?: return emptyList()
 
-    val zones = parseZones(selected)
+    val zones = selected.floorProfile?.let { parseFloorProfile(it, selected.sport) }
+        ?: selected.values?.let { parseZoneList(it, selected) }
+        ?: emptyList()
     return zones.filter { it.number in 1..5 }.distinctBy { it.number }.sortedBy { it.number }
         .takeIf { it.size == 5 } ?: emptyList()
 }
@@ -80,14 +82,17 @@ private fun collectZoneGroups(
     when (value) {
         is JSONObject -> {
             val sport = sportText(value) ?: inheritedSport
-            val maxHeartRate = value.firstNumber("maxHeartRate", "maximumHeartRate", "maxHr") ?: inheritedMax
-            val restingHeartRate = value.firstNumber("restingHeartRate", "restingHr") ?: inheritedResting
+            val maxHeartRate = value.firstNumber("maxHeartRateUsed", "maxHeartRate", "maximumHeartRate", "maxHr") ?: inheritedMax
+            val restingHeartRate = value.firstNumber("restingHeartRateUsed", "restingHeartRate", "restingHr") ?: inheritedResting
             val method = value.firstText("trainingMethod", "zoneCalculationMethod", "heartRateZoneType") ?: inheritedMethod
 
+            if ((1..5).count { value.has("zone${it}Floor") && !value.isNull("zone${it}Floor") } == 5) {
+                result.add(ZoneGroup(sport, null, value, maxHeartRate, restingHeartRate, method))
+            }
             listOf("zones", "heartRateZones").forEach { key ->
                 val array = value.optJSONArray(key)
                 if (array != null && looksLikeZoneList(array)) {
-                    result.add(ZoneGroup(sport, array, maxHeartRate, restingHeartRate, method))
+                    result.add(ZoneGroup(sport, array, null, maxHeartRate, restingHeartRate, method))
                 }
             }
             val keys = value.keys()
@@ -101,7 +106,7 @@ private fun collectZoneGroups(
         }
         is JSONArray -> {
             if (looksLikeZoneList(value)) {
-                result.add(ZoneGroup(inheritedSport, value, inheritedMax, inheritedResting, inheritedMethod))
+                result.add(ZoneGroup(inheritedSport, value, null, inheritedMax, inheritedResting, inheritedMethod))
             }
             for (index in 0 until value.length()) {
                 val child = value.opt(index)
@@ -113,21 +118,28 @@ private fun collectZoneGroups(
     }
 }
 
-private fun looksLikeZoneList(array: JSONArray): Boolean {
-    if (array.length() < 5) return false
-    var zoneLikeCount = 0
-    for (index in 0 until array.length()) {
-        val item = array.optJSONObject(index) ?: continue
-        if (item.has("zoneNumber") || item.has("zoneIndex") || item.has("zoneLowBoundary") ||
-            item.has("zoneHighBoundary") || item.has("lowBoundary") || item.has("highBoundary")
-        ) zoneLikeCount++
+private fun parseFloorProfile(profile: JSONObject, sport: String): List<HeartRateZone> {
+    val floors = (1..5).map { index ->
+        profile.firstNumber("zone${index}Floor")?.roundToInt()
     }
-    return zoneLikeCount >= 3
+    if (floors.any { it == null }) return emptyList()
+    val values = floors.filterNotNull()
+    val maxHeartRate = profile.firstNumber("maxHeartRateUsed", "maxHeartRate", "maximumHeartRate")?.roundToInt()
+    return (1..5).map { index ->
+        val lower = values[index - 1]
+        val upper = if (index < 5) values[index] - 1 else maxHeartRate
+        HeartRateZone(
+            number = index,
+            minBpm = lower.takeIf { it in 35..240 },
+            maxBpm = upper?.takeIf { it in 35..240 },
+            sport = sport.ifBlank { "RUNNING" }
+        )
+    }
 }
 
-private fun parseZones(group: ZoneGroup): List<HeartRateZone> = buildList {
-    for (index in 0 until group.values.length()) {
-        val item = group.values.optJSONObject(index) ?: continue
+private fun parseZoneList(array: JSONArray, group: ZoneGroup): List<HeartRateZone> = buildList {
+    for (index in 0 until array.length()) {
+        val item = array.optJSONObject(index) ?: continue
         val number = item.firstInt("zoneNumber", "zoneIndex", "number") ?: index + 1
         val low = item.firstNumberWithKey(
             "zoneLowBoundary", "lowBoundary", "lowerBoundary", "minHeartRate", "minimumHeartRate", "lowBpm", "minBpm", "low"
@@ -141,7 +153,7 @@ private fun parseZones(group: ZoneGroup): List<HeartRateZone> = buildList {
             (lowBpm == null || lowBpm in 35..240) && (highBpm == null || highBpm in 35..240) &&
             (lowBpm == null || highBpm == null || highBpm >= lowBpm)
         ) {
-            add(HeartRateZone(number, lowBpm, highBpm))
+            add(HeartRateZone(number, lowBpm, highBpm, group.sport.ifBlank { "RUNNING" }))
         }
     }
 }
@@ -166,6 +178,18 @@ private fun boundaryToBpm(value: Double, key: String, group: ZoneGroup): Int? {
         max * percent / 100.0
     }
     return bpm.roundToInt().takeIf { it in 35..240 }
+}
+
+private fun looksLikeZoneList(array: JSONArray): Boolean {
+    if (array.length() < 5) return false
+    var zoneLikeCount = 0
+    for (index in 0 until array.length()) {
+        val item = array.optJSONObject(index) ?: continue
+        if (item.has("zoneNumber") || item.has("zoneIndex") || item.has("zoneLowBoundary") ||
+            item.has("zoneHighBoundary") || item.has("lowBoundary") || item.has("highBoundary")
+        ) zoneLikeCount++
+    }
+    return zoneLikeCount >= 3
 }
 
 private fun sportText(value: JSONObject): String? {
