@@ -5,9 +5,17 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.DirectionsRun
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Flag
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -33,15 +41,14 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// Die Bereiche der App (unten in der Leiste, nur als Symbol).
-enum class Screen(val label: String, val symbol: String) {
-    Start("Ziele", "🎯"),
-    Laufcoach("Laufcoach", "🏃"),
-    Laeufe("Läufe", "👟"),
-    Koerper("Gesundheit", "🫀"),
-    Kalender("Kalender", "📅"),
-    Auswertung("Auswertung", "📊"),
-    Einstellungen("Einstellungen", "⚙️")
+// Die Bereiche der App. Labels dienen der Barrierefreiheit, werden aber nicht unter den Icons gezeigt.
+enum class Screen(val label: String, val icon: ImageVector) {
+    Start("Ziele", Icons.Filled.Flag),
+    Laufcoach("Laufcoach", Icons.Filled.DirectionsRun),
+    Laeufe("Läufe", Icons.Filled.History),
+    Koerper("Gesundheit", Icons.Filled.Favorite),
+    Kalender("Kalender", Icons.Filled.DateRange),
+    Einstellungen("Einstellungen", Icons.Filled.Settings)
 }
 
 @Composable
@@ -57,8 +64,14 @@ fun SportAppScreen() {
                     NavigationBarItem(
                         selected = current == screen,
                         onClick = { current = screen },
-                        icon = { Text(screen.symbol, fontSize = 24.sp) },
-                        label = { Text(screen.label, fontSize = 10.sp) }
+                        icon = {
+                            Icon(
+                                imageVector = screen.icon,
+                                contentDescription = screen.label,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        },
+                        label = null
                     )
                 }
             }
@@ -70,7 +83,6 @@ fun SportAppScreen() {
             Screen.Laeufe -> RunHistoryContent(db, Modifier.padding(innerPadding))
             Screen.Koerper -> BodyContent(Modifier.padding(innerPadding))
             Screen.Kalender -> CalendarContent(db, Modifier.padding(innerPadding))
-            Screen.Auswertung -> StatsContent(db, Modifier.padding(innerPadding))
             Screen.Einstellungen -> SettingsContent(db, Modifier.padding(innerPadding))
         }
     }
